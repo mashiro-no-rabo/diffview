@@ -7,6 +7,25 @@ use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragra
 use crate::model::{App, VisibleKind};
 use crate::parser::{FileStatus, HunkLine};
 
+/// Parse "@@ -old_start,count +new_start,count @@" to extract starting line numbers.
+fn parse_hunk_start(header: &str) -> (usize, usize) {
+    // header looks like "@@ -36,8 +36,8 @@ optional context"
+    let mut old_start = 1;
+    let mut new_start = 1;
+    if let Some(rest) = header.strip_prefix("@@ -") {
+        if let Some(comma_or_space) = rest.find([',', ' ']) {
+            old_start = rest[..comma_or_space].parse().unwrap_or(1);
+        }
+        if let Some(plus) = rest.find('+') {
+            let after_plus = &rest[plus + 1..];
+            if let Some(comma_or_space) = after_plus.find([',', ' ']) {
+                new_start = after_plus[..comma_or_space].parse().unwrap_or(1);
+            }
+        }
+    }
+    (old_start, new_start)
+}
+
 const HUNK_MARKER_TOP: &str = "┌";
 const HUNK_MARKER_MID: &str = "│";
 const HUNK_MARKER_BOT: &str = "└";
@@ -20,7 +39,22 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let main_area = chunks[0];
     let status_area = chunks[1];
 
-    draw_main_view(frame, app, main_area);
+    let confirmed = app.total_confirmed_hunks();
+    let total = app.total_hunks();
+    let header_title = format!(" Diffview  {}/{} confirmed ", confirmed, total);
+    let header_block = Block::default()
+        .borders(Borders::ALL)
+        .title(header_title)
+        .title_style(
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )
+        .border_style(Style::default().fg(Color::Cyan));
+    let header_inner = header_block.inner(main_area);
+    frame.render_widget(header_block, main_area);
+
+    draw_main_view(frame, app, header_inner);
     draw_status_bar(frame, app, status_area);
 
     if app.show_help {
@@ -32,120 +66,321 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
 }
 
-fn draw_main_view(frame: &mut Frame, app: &mut App, area: Rect) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(" Diff Review ")
-        .title_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
-        .border_style(Style::default().fg(Color::Cyan));
+// ── Segment tree ──
 
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+enum Segment<'a> {
+    Folder {
+        path: String,        // display name (may be compressed like "src/app")
+        full_path: String,   // actual full path for state lookups
+        children: Vec<Segment<'a>>,
+    },
+    File {
+        file_idx: usize,
+        children: Vec<Segment<'a>>,
+    },
+    Line(Line<'a>),
+}
 
+/// Build segment tree directly from the app's visible items.
+fn build_segment_tree<'a>(app: &'a App, cursor: usize) -> Vec<Segment<'a>> {
     let visible = app.visible_items();
-    if visible.is_empty() {
-        let msg = Paragraph::new("  All hunks confirmed! Press q to exit.");
-        frame.render_widget(msg, inner);
-        return;
+
+    // First, build a raw nested structure from visible items.
+    // Group by folder stack, then by file.
+    // We iterate visible items and track folder/file context.
+
+    struct FileData<'b> {
+        folder_stack: Vec<String>,
+        file_idx: usize,
+        lines: Vec<Line<'b>>,
     }
 
-    let mut lines: Vec<Line> = Vec::new();
-    let cursor = app.cursor;
+    let mut file_datas: Vec<FileData> = Vec::new();
+    let mut current_file: Option<FileData> = None;
+    let mut current_folder_stack: Vec<String> = Vec::new();
 
     for (vis_idx, vi) in visible.iter().enumerate() {
         match &vi.kind {
             VisibleKind::Folder(path) => {
-                let is_focused = vis_idx == cursor;
-                let all_conf = app.folder_all_confirmed(path);
-                let none_conf = app.folder_none_confirmed(path);
-                let indicator = if all_conf {
-                    "x"
-                } else if none_conf {
-                    " "
+                // Update folder stack to this depth
+                let depth = vi.depth;
+                current_folder_stack.truncate(depth);
+                if current_folder_stack.len() == depth {
+                    current_folder_stack.push(path.clone());
+                }
+            }
+            VisibleKind::File(file_idx) => {
+                // Flush previous file
+                if let Some(fd) = current_file.take() {
+                    file_datas.push(fd);
+                }
+                current_file = Some(FileData {
+                    folder_stack: current_folder_stack.clone(),
+                    file_idx: *file_idx,
+                    lines: Vec::new(),
+                });
+            }
+            VisibleKind::HunkHeader(file_idx, hunk_idx) => {
+                if let Some(ref mut fd) = current_file {
+                    let hunk = &app.files[*file_idx].hunks[*hunk_idx];
+                    let is_focused = vis_idx == cursor;
+                    let check = if hunk.confirmed { "✓" } else { " " };
+
+                    let marker_color = if is_focused {
+                        Color::Cyan
+                    } else {
+                        Color::DarkGray
+                    };
+
+                    fd.lines.push(Line::from(vec![
+                        Span::styled(HUNK_MARKER_TOP, Style::default().fg(marker_color)),
+                        Span::styled(
+                            format!(" [{}] ", check),
+                            if is_focused {
+                                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                            } else {
+                                Style::default().fg(Color::White)
+                            },
+                        ),
+                        Span::styled(
+                            format!("+{}", hunk.additions),
+                            Style::default().fg(Color::Green),
+                        ),
+                        Span::raw(" "),
+                        Span::styled(
+                            format!("-{}", hunk.deletions),
+                            Style::default().fg(Color::Red),
+                        ),
+                        Span::styled(
+                            format!("  {}", hunk.header),
+                            Style::default().fg(Color::DarkGray),
+                        ),
+                    ]));
+                }
+            }
+            VisibleKind::HunkLine(file_idx, hunk_idx, line_idx) => {
+                if let Some(ref mut fd) = current_file {
+                    let hunk = &app.files[*file_idx].hunks[*hunk_idx];
+                    let is_last = *line_idx + 1 == hunk.lines.len();
+                    let marker = if is_last {
+                        HUNK_MARKER_BOT
+                    } else {
+                        HUNK_MARKER_MID
+                    };
+
+                    let hunk_header_focused = visible.iter().enumerate().any(|(vi, item)| {
+                        vi == cursor
+                            && matches!(&item.kind, VisibleKind::HunkHeader(fi, hi) if *fi == *file_idx && *hi == *hunk_idx)
+                    });
+                    let marker_color = if hunk_header_focused {
+                        Color::Cyan
+                    } else {
+                        Color::DarkGray
+                    };
+
+                    // Compute line numbers from hunk header
+                    let (old_start, new_start) = parse_hunk_start(&hunk.header);
+                    let mut old_line = old_start;
+                    let mut new_line = new_start;
+                    // Walk lines up to line_idx to compute current line numbers
+                    for l in &hunk.lines[..*line_idx] {
+                        match l {
+                            HunkLine::Context(_) => { old_line += 1; new_line += 1; }
+                            HunkLine::Addition(_) => { new_line += 1; }
+                            HunkLine::Deletion(_) => { old_line += 1; }
+                        }
+                    }
+
+                    let hunk_line = &hunk.lines[*line_idx];
+                    let (prefix, text, style, line_num_str) = match hunk_line {
+                        HunkLine::Context(s) => {
+                            (" ", s.as_str(), Style::default().fg(Color::DarkGray),
+                             format!("{:>4}", old_line))
+                        }
+                        HunkLine::Addition(s) => {
+                            ("+", s.as_str(), Style::default().fg(Color::Green),
+                             format!("{:>4}", new_line))
+                        }
+                        HunkLine::Deletion(s) => {
+                            ("-", s.as_str(), Style::default().fg(Color::Red),
+                             format!("{:>4}", old_line))
+                        }
+                    };
+
+                    fd.lines.push(Line::from(vec![
+                        Span::styled(marker, Style::default().fg(marker_color)),
+                        Span::styled(
+                            format!(" {} ", line_num_str),
+                            Style::default().fg(Color::DarkGray),
+                        ),
+                        Span::styled(format!("{} ", prefix), style),
+                        Span::styled(text, style),
+                    ]));
+                }
+            }
+        }
+    }
+    // Flush last file
+    if let Some(fd) = current_file.take() {
+        file_datas.push(fd);
+    }
+
+    // Now build segments from file_datas, nesting by folder_stack
+    fn nest_files<'b>(files: &mut [FileData<'b>], depth: usize) -> Vec<Segment<'b>> {
+        let mut segments: Vec<Segment<'b>> = Vec::new();
+        let mut i = 0;
+
+        while i < files.len() {
+            if depth < files[i].folder_stack.len() {
+                let folder_path = files[i].folder_stack[depth].clone();
+                let start = i;
+                while i < files.len()
+                    && depth < files[i].folder_stack.len()
+                    && files[i].folder_stack[depth] == folder_path
+                {
+                    i += 1;
+                }
+                let children = nest_files(&mut files[start..i], depth + 1);
+                segments.push(Segment::Folder {
+                    path: folder_path.rsplit('/').next().unwrap_or(&folder_path).to_string(),
+                    full_path: folder_path,
+                    children,
+                });
+            } else {
+                let fd = &mut files[i];
+                let lines = std::mem::take(&mut fd.lines);
+                let children: Vec<Segment<'b>> =
+                    lines.into_iter().map(Segment::Line).collect();
+                segments.push(Segment::File {
+                    file_idx: fd.file_idx,
+                    children,
+                });
+                i += 1;
+            }
+        }
+
+        segments
+    }
+
+    let mut segments = nest_files(&mut file_datas, 0);
+
+    // Compress single-child folder chains
+    compress_folders(&mut segments);
+
+    segments
+}
+
+/// Merge folder chains: if a folder has exactly one child and it's a folder,
+/// merge them into one block with combined name.
+fn compress_folders(segments: &mut Vec<Segment>) {
+    for seg in segments.iter_mut() {
+        if let Segment::Folder {
+            path,
+            full_path,
+            children,
+        } = seg
+        {
+            // First compress children recursively
+            compress_folders(children);
+
+            // Then check if we should merge with single folder child
+            while children.len() == 1 {
+                if let Segment::Folder {
+                    path: child_path,
+                    full_path: child_full,
+                    children: child_children,
+                } = &mut children[0]
+                {
+                    *path = format!("{}/{}", path, child_path);
+                    *full_path = child_full.clone();
+                    let grandchildren = std::mem::take(child_children);
+                    *children = grandchildren;
                 } else {
-                    "~"
+                    break;
+                }
+            }
+        }
+    }
+}
+
+fn segment_height(seg: &Segment) -> u16 {
+    match seg {
+        Segment::Line(_) => 1,
+        Segment::Folder { children, .. } | Segment::File { children, .. } => {
+            let inner: u16 = children.iter().map(|c| segment_height(c)).sum();
+            inner + 2 // +2 for top and bottom border
+        }
+    }
+}
+
+fn render_segments(
+    frame: &mut Frame,
+    area: Rect,
+    segments: &[Segment],
+    app: &App,
+    scroll: &mut u16,
+    focused_folder: Option<&str>,
+    focused_file: Option<usize>,
+) {
+    let mut y = area.y;
+    let bottom = area.y + area.height;
+
+    for seg in segments {
+        let h = segment_height(seg);
+
+        if *scroll >= h {
+            *scroll -= h;
+            continue;
+        }
+
+        if y >= bottom {
+            break;
+        }
+
+        match seg {
+            Segment::Line(line) => {
+                if *scroll > 0 {
+                    *scroll -= 1;
+                    continue;
+                }
+                if y < bottom {
+                    let line_area = Rect::new(area.x, y, area.width, 1);
+                    frame.render_widget(Paragraph::new(line.clone()), line_area);
+                    y += 1;
+                }
+            }
+            Segment::Folder {
+                path,
+                full_path,
+                children,
+            } => {
+                let available = bottom.saturating_sub(y);
+                let render_h = h.saturating_sub(*scroll).min(available);
+                if render_h == 0 {
+                    continue;
+                }
+
+                let block_area = Rect::new(area.x, y, area.width, render_h);
+
+                let check = if app.folder_all_confirmed(full_path) {
+                    "✓"
+                } else {
+                    " "
                 };
-                let (open, close) = if is_focused { ("(", ")") } else { ("[", "]") };
-                let fold_icon = if app.folded.contains(path) {
+                let fold_icon = if app.folded.contains(full_path) {
                     "▶"
                 } else {
                     "▼"
                 };
-                let name = path.rsplit('/').next().unwrap_or(path);
-                let indent = "──".repeat(vi.depth + 1);
+                let title = format!(" [{}] {} {}/ ", check, fold_icon, path);
 
-                let line_style = if is_focused {
-                    Style::default().add_modifier(Modifier::REVERSED)
-                } else {
-                    Style::default()
-                };
-
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        format!("├{} {}{}{} {} {}/", indent, open, indicator, close, fold_icon, name),
-                        line_style.add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(" ───", Style::default().fg(Color::DarkGray)),
-                ]));
-            }
-            VisibleKind::File(file_idx) => {
-                let file = &app.files[*file_idx];
-                let is_focused = vis_idx == cursor;
-                let all_conf = file.all_confirmed();
-                let none_conf = file.none_confirmed();
-                let indicator = if all_conf {
-                    "x"
-                } else if none_conf {
-                    " "
-                } else {
-                    "~"
-                };
-                let (open, close) = if is_focused { ("(", ")") } else { ("[", "]") };
-                let name = file.rel_path.rsplit('/').next().unwrap_or(&file.rel_path);
-                let indent = "──".repeat(vi.depth + 1);
-
-                let (status_char, status_color) = match file.status {
-                    FileStatus::Modified => ("M", Color::Yellow),
-                    FileStatus::Added => ("A", Color::Green),
-                };
-
-                let line_style = if is_focused {
-                    Style::default().add_modifier(Modifier::REVERSED)
-                } else {
-                    Style::default()
-                };
-
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        format!("├{} {}{}{} {}", indent, open, indicator, close, name),
-                        line_style,
-                    ),
-                    Span::raw("  "),
-                    Span::styled(status_char, Style::default().fg(status_color)),
-                    Span::raw("  "),
-                    Span::styled(
-                        format!("+{}", file.additions),
-                        Style::default().fg(Color::Green),
-                    ),
-                    Span::raw(" "),
-                    Span::styled(
-                        format!("-{}", file.deletions),
-                        Style::default().fg(Color::Red),
-                    ),
-                ]));
-            }
-            VisibleKind::HunkHeader(file_idx, hunk_idx) => {
-                let hunk = &app.files[*file_idx].hunks[*hunk_idx];
-                let is_focused = vis_idx == cursor;
-                let indicator = if hunk.confirmed { "x" } else { " " };
-                let (open, close) = if is_focused { ("(", ")") } else { ("[", "]") };
-
-                let marker_color = if is_focused {
+                let is_focused = focused_folder == Some(full_path.as_str());
+                let border_color = if is_focused {
                     Color::Cyan
                 } else {
                     Color::DarkGray
                 };
-                let header_style = if is_focused {
+                let title_style = if is_focused {
                     Style::default()
                         .fg(Color::Cyan)
                         .add_modifier(Modifier::BOLD)
@@ -153,82 +388,266 @@ fn draw_main_view(frame: &mut Frame, app: &mut App, area: Rect) {
                     Style::default().fg(Color::White)
                 };
 
-                lines.push(Line::from(vec![
-                    Span::styled(HUNK_MARKER_TOP, Style::default().fg(marker_color)),
-                    Span::styled(
-                        format!(" {}{}{} {}", open, indicator, close, hunk.header),
-                        header_style,
-                    ),
-                    Span::raw("  "),
-                    Span::styled(format!("+{}", hunk.additions), Style::default().fg(Color::Green)),
-                    Span::raw(" "),
-                    Span::styled(format!("-{}", hunk.deletions), Style::default().fg(Color::Red)),
-                ]));
-            }
-            VisibleKind::HunkLine(file_idx, hunk_idx, line_idx) => {
-                let hunk = &app.files[*file_idx].hunks[*hunk_idx];
-                let is_last = *line_idx + 1 == hunk.lines.len();
-                let marker = if is_last {
-                    HUNK_MARKER_BOT
+                let block = Block::default()
+                    .borders(Borders::ALL)
+                    .title(title)
+                    .title_style(title_style)
+                    .border_style(Style::default().fg(border_color));
+
+                let inner = block.inner(block_area);
+                frame.render_widget(block, block_area);
+
+                let mut child_scroll = if *scroll > 0 {
+                    let s = scroll.saturating_sub(1);
+                    *scroll = 0;
+                    s
                 } else {
-                    HUNK_MARKER_MID
+                    0
                 };
 
-                // Use same marker color as the hunk header
-                let hunk_header_focused = visible.iter().enumerate().any(|(vi, item)| {
-                    vi == cursor
-                        && matches!(&item.kind, VisibleKind::HunkHeader(fi, hi) if *fi == *file_idx && *hi == *hunk_idx)
-                });
-                let marker_color = if hunk_header_focused {
+                render_segments(
+                    frame,
+                    inner,
+                    children,
+                    app,
+                    &mut child_scroll,
+                    focused_folder,
+                    focused_file,
+                );
+
+                y += render_h;
+            }
+            Segment::File { file_idx, children } => {
+                let available = bottom.saturating_sub(y);
+                let render_h = h.saturating_sub(*scroll).min(available);
+                if render_h == 0 {
+                    continue;
+                }
+
+                let block_area = Rect::new(area.x, y, area.width, render_h);
+
+                let file = &app.files[*file_idx];
+                let check = if file.all_confirmed() { "✓" } else { " " };
+                let fold_icon = if app.folded_files.contains(file_idx) || file.all_confirmed() {
+                    "▶"
+                } else {
+                    "▼"
+                };
+                let name = file.rel_path.rsplit('/').next().unwrap_or(&file.rel_path);
+
+                let status_char = match file.status {
+                    FileStatus::Modified => "M",
+                    FileStatus::Added => "A",
+                    FileStatus::Deleted => "D",
+                };
+
+                let title = format!(
+                    " [{}] {} {}  {}  +{} -{} ",
+                    check, fold_icon, name, status_char, file.additions, file.deletions
+                );
+
+                let is_focused = focused_file == Some(*file_idx);
+                let border_color = if is_focused {
                     Color::Cyan
                 } else {
                     Color::DarkGray
                 };
-
-                let hunk_line = &hunk.lines[*line_idx];
-                let (prefix, text, style) = match hunk_line {
-                    HunkLine::Context(s) => (" ", s.as_str(), Style::default().fg(Color::DarkGray)),
-                    HunkLine::Addition(s) => ("+", s.as_str(), Style::default().fg(Color::Green)),
-                    HunkLine::Deletion(s) => ("-", s.as_str(), Style::default().fg(Color::Red)),
+                let title_style = if is_focused {
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::White)
                 };
 
-                lines.push(Line::from(vec![
-                    Span::styled(marker, Style::default().fg(marker_color)),
-                    Span::styled(format!(" {} ", prefix), style),
-                    Span::styled(text, style),
-                ]));
+                // Color the +/- in title via separate title spans isn't easy with
+                // Block::title taking a single string. Use the status color for the
+                // whole title when focused, white otherwise.
+                let block = Block::default()
+                    .borders(Borders::ALL)
+                    .title(title)
+                    .title_style(title_style)
+                    .border_style(Style::default().fg(border_color));
+
+                let inner = block.inner(block_area);
+                frame.render_widget(block, block_area);
+
+                let mut child_scroll = if *scroll > 0 {
+                    let s = scroll.saturating_sub(1);
+                    *scroll = 0;
+                    s
+                } else {
+                    0
+                };
+
+                render_segments(
+                    frame,
+                    inner,
+                    children,
+                    app,
+                    &mut child_scroll,
+                    focused_folder,
+                    focused_file,
+                );
+
+                y += render_h;
             }
         }
     }
-
-    // Apply scroll offset to keep cursor visible
-    let visible_height = inner.height as usize;
-    let scroll = compute_scroll(cursor, &visible, visible_height, app.scroll_offset);
-    app.scroll_offset = scroll;
-
-    let visible_lines: Vec<Line> = lines.into_iter().skip(scroll).take(visible_height).collect();
-    let paragraph = Paragraph::new(visible_lines);
-    frame.render_widget(paragraph, inner);
 }
 
-fn compute_scroll(
-    cursor: usize,
-    _visible: &[crate::model::VisibleItem],
-    visible_height: usize,
-    current_scroll: usize,
-) -> usize {
-    // Find line offset of cursor item
-    let line_offset = cursor;
-
-    if line_offset < current_scroll {
-        return line_offset;
+fn draw_main_view(frame: &mut Frame, app: &mut App, area: Rect) {
+    let visible = app.visible_items();
+    if visible.is_empty() {
+        let msg = Paragraph::new("  All hunks confirmed! Press q to exit.");
+        frame.render_widget(msg, area);
+        return;
     }
 
-    if line_offset >= current_scroll + visible_height {
-        return line_offset.saturating_sub(visible_height / 2);
+    let cursor = app.cursor;
+
+    // Determine focused folder/file
+    let focused_folder = visible.get(cursor).and_then(|vi| {
+        if let VisibleKind::Folder(path) = &vi.kind {
+            Some(path.clone())
+        } else {
+            None
+        }
+    });
+    let focused_file = visible.get(cursor).and_then(|vi| match &vi.kind {
+        VisibleKind::File(idx) => Some(*idx),
+        _ => None,
+    });
+
+    let segments = build_segment_tree(app, cursor);
+
+    let scroll = compute_scroll_nested(
+        cursor,
+        &visible,
+        &segments,
+        area.height,
+        app.scroll_offset as u16,
+    );
+
+    let mut scroll_remaining = scroll;
+    render_segments(
+        frame,
+        area,
+        &segments,
+        app,
+        &mut scroll_remaining,
+        focused_folder.as_deref(),
+        focused_file,
+    );
+
+    app.scroll_offset = scroll as usize;
+}
+
+fn compute_scroll_nested(
+    cursor: usize,
+    visible: &[crate::model::VisibleItem],
+    segments: &[Segment],
+    visible_height: u16,
+    current_scroll: u16,
+) -> u16 {
+    // Find which entry index corresponds to the cursor position
+    // Entries skip Folder and File items (they're blocks, not lines).
+    // But we need to account for folder/file block borders in the y offset.
+    // Use a different approach: walk the segment tree and find which segment
+    // contains the cursor's visible item.
+
+    let cursor_kind = visible.get(cursor).map(|vi| &vi.kind);
+
+    let search = match cursor_kind {
+        Some(VisibleKind::Folder(path)) => Some(SearchTarget::Folder(path)),
+        Some(VisibleKind::File(idx)) => Some(SearchTarget::File(*idx)),
+        Some(VisibleKind::HunkHeader(_, _) | VisibleKind::HunkLine(_, _, _)) => {
+            let mut entry_idx = 0;
+            let mut target = None;
+            for (vis_idx, vi) in visible.iter().enumerate() {
+                if matches!(vi.kind, VisibleKind::Folder(_) | VisibleKind::File(_)) {
+                    continue;
+                }
+                if vis_idx == cursor {
+                    target = Some(entry_idx);
+                    break;
+                }
+                entry_idx += 1;
+            }
+            target.map(SearchTarget::Line)
+        }
+        None => None,
+    };
+
+    let offset = search.and_then(|s| {
+        let mut state = FindState { y: 0, line_counter: 0 };
+        find_y_offset(segments, &s, &mut state)
+    });
+
+    let offset = offset.unwrap_or(0) as u16;
+
+    if offset < current_scroll {
+        return offset.saturating_sub(1);
+    }
+
+    if offset >= current_scroll + visible_height {
+        return offset.saturating_sub(visible_height / 2);
     }
 
     current_scroll
+}
+
+enum SearchTarget<'a> {
+    Folder(&'a str),
+    File(usize),
+    Line(usize), // nth content line
+}
+
+/// Find y offset of a target within the segment tree.
+fn find_y_offset(segments: &[Segment], target: &SearchTarget, state: &mut FindState) -> Option<usize> {
+    for seg in segments {
+        match seg {
+            Segment::Line(_) => {
+                if let SearchTarget::Line(n) = target {
+                    if state.line_counter == *n {
+                        return Some(state.y);
+                    }
+                    state.line_counter += 1;
+                }
+                state.y += 1;
+            }
+            Segment::Folder { full_path, children, .. } => {
+                if let SearchTarget::Folder(p) = target {
+                    if full_path.as_str() == *p {
+                        return Some(state.y);
+                    }
+                }
+                state.y += 1; // top border
+                if let Some(r) = find_y_offset(children, target, state) {
+                    return Some(r);
+                }
+                state.y += 1; // bottom border
+            }
+            Segment::File { file_idx, children, .. } => {
+                if let SearchTarget::File(idx) = target {
+                    if *file_idx == *idx {
+                        return Some(state.y);
+                    }
+                }
+                state.y += 1; // top border
+                if let Some(r) = find_y_offset(children, target, state) {
+                    return Some(r);
+                }
+                state.y += 1; // bottom border
+            }
+        }
+    }
+    None
+}
+
+struct FindState {
+    y: usize,
+    line_counter: usize,
 }
 
 fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
@@ -280,11 +699,11 @@ fn draw_help_dialog(frame: &mut Frame) {
         ]),
         Line::from(vec![
             Span::styled("  ←          ", Style::default().fg(Color::Yellow)),
-            Span::raw("Fold folder"),
+            Span::raw("Fold folder/file"),
         ]),
         Line::from(vec![
             Span::styled("  →          ", Style::default().fg(Color::Yellow)),
-            Span::raw("Unfold folder"),
+            Span::raw("Unfold folder/file"),
         ]),
         Line::from(vec![
             Span::styled("  Space      ", Style::default().fg(Color::Yellow)),
@@ -348,13 +767,11 @@ fn draw_file_list_popup(frame: &mut Frame, app: &mut App) {
     let inner = block.inner(dialog);
     frame.render_widget(block, dialog);
 
-    // Split inner into search bar + file list
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(1), Constraint::Min(1)])
         .split(inner);
 
-    // Search bar
     let search_line = Line::from(vec![
         Span::styled(" > ", Style::default().fg(Color::Yellow)),
         Span::raw(&app.file_list_query),
@@ -362,7 +779,6 @@ fn draw_file_list_popup(frame: &mut Frame, app: &mut App) {
     ]);
     frame.render_widget(Paragraph::new(search_line), chunks[0]);
 
-    // File list
     let filtered = app.filtered_files();
     let list_area = chunks[1];
 
@@ -370,19 +786,17 @@ fn draw_file_list_popup(frame: &mut Frame, app: &mut App) {
     for (file_idx, match_info) in &filtered {
         let file = &app.files[*file_idx];
         let confirmed_marker = if file.all_confirmed() {
-            "[x] "
-        } else if file.none_confirmed() {
-            "[ ] "
+            "[✓] "
         } else {
-            "[~] "
+            "[ ] "
         };
 
         let (status_char, status_color) = match file.status {
             FileStatus::Modified => ("M", Color::Yellow),
             FileStatus::Added => ("A", Color::Green),
+            FileStatus::Deleted => ("D", Color::Red),
         };
 
-        // Build path with highlighted match indices
         let path = &file.rel_path;
         let mut spans = vec![Span::raw(confirmed_marker.to_string())];
 
@@ -393,13 +807,18 @@ fn draw_file_list_popup(frame: &mut Frame, app: &mut App) {
                     spans.push(Span::raw(&path[last..idx]));
                 }
                 if idx < path.len() {
+                    let char_len = path[idx..]
+                        .chars()
+                        .next()
+                        .map(|c| c.len_utf8())
+                        .unwrap_or(1);
                     spans.push(Span::styled(
-                        &path[idx..idx + path[idx..].chars().next().map(|c| c.len_utf8()).unwrap_or(1)],
+                        &path[idx..idx + char_len],
                         Style::default()
                             .fg(Color::Yellow)
                             .add_modifier(Modifier::BOLD),
                     ));
-                    last = idx + path[idx..].chars().next().map(|c| c.len_utf8()).unwrap_or(1);
+                    last = idx + char_len;
                 }
             }
             if last < path.len() {
@@ -432,8 +851,8 @@ fn draw_file_list_popup(frame: &mut Frame, app: &mut App) {
         list_state.select(Some(clamped));
     }
 
-    let list = List::new(items)
-        .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+    let list =
+        List::new(items).highlight_style(Style::default().add_modifier(Modifier::REVERSED));
 
     frame.render_stateful_widget(list, list_area, &mut list_state);
 }

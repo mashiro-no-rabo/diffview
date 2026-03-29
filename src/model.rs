@@ -19,7 +19,8 @@ pub struct VisibleItem {
 
 pub struct App {
     pub files: Vec<FileEntry>,
-    pub folded: HashSet<String>,
+    pub folded: HashSet<String>,        // folded folder paths
+    pub folded_files: HashSet<usize>,   // folded file indices (hunks hidden)
     pub cursor: usize,
     pub scroll_offset: usize,
     pub should_exit: bool,
@@ -32,9 +33,20 @@ pub struct App {
 
 impl App {
     pub fn new(files: Vec<FileEntry>) -> Self {
+        // Default fold .lock files and deleted files
+        let mut folded_files = HashSet::new();
+        for (idx, file) in files.iter().enumerate() {
+            if file.rel_path.ends_with(".lock")
+                || file.status == crate::parser::FileStatus::Deleted
+            {
+                folded_files.insert(idx);
+            }
+        }
+
         Self {
             files,
             folded: HashSet::new(),
+            folded_files,
             cursor: 0,
             scroll_offset: 0,
             should_exit: false,
@@ -66,19 +78,14 @@ impl App {
                 current_path.push_str(part);
 
                 if !emitted_folders.contains(&current_path) {
-                    // Check if all files under this folder are confirmed
-                    let all_confirmed = self.folder_all_confirmed(&current_path);
-                    if !all_confirmed {
-                        emitted_folders.insert(current_path.clone());
-                        items.push(VisibleItem {
-                            kind: VisibleKind::Folder(current_path.clone()),
-                            depth,
-                        });
-                    }
+                    emitted_folders.insert(current_path.clone());
+                    items.push(VisibleItem {
+                        kind: VisibleKind::Folder(current_path.clone()),
+                        depth,
+                    });
                 }
 
-                if self.folded.contains(&current_path) || self.folder_all_confirmed(&current_path)
-                {
+                if self.folded.contains(&current_path) {
                     hidden = true;
                     break;
                 }
@@ -88,35 +95,33 @@ impl App {
                 continue;
             }
 
-            // Skip confirmed files
-            if file.all_confirmed() {
-                continue;
-            }
-
             let file_depth = parts.len() - 1;
 
-            // File header
+            // File header (always shown)
             items.push(VisibleItem {
                 kind: VisibleKind::File(file_idx),
                 depth: file_depth,
             });
 
             // Hunk headers and lines
-            for (hunk_idx, hunk) in file.hunks.iter().enumerate() {
-                if hunk.confirmed {
-                    continue;
-                }
-
-                items.push(VisibleItem {
-                    kind: VisibleKind::HunkHeader(file_idx, hunk_idx),
-                    depth: file_depth + 1,
-                });
-
-                for (line_idx, _) in hunk.lines.iter().enumerate() {
+            let file_folded = self.folded_files.contains(&file_idx) || file.all_confirmed();
+            if !file_folded {
+                for (hunk_idx, hunk) in file.hunks.iter().enumerate() {
+                    // Hunk header always visible
                     items.push(VisibleItem {
-                        kind: VisibleKind::HunkLine(file_idx, hunk_idx, line_idx),
+                        kind: VisibleKind::HunkHeader(file_idx, hunk_idx),
                         depth: file_depth + 1,
                     });
+
+                    // Hunk lines hidden if hunk is confirmed (folded)
+                    if !hunk.confirmed {
+                        for (line_idx, _) in hunk.lines.iter().enumerate() {
+                            items.push(VisibleItem {
+                                kind: VisibleKind::HunkLine(file_idx, hunk_idx, line_idx),
+                                depth: file_depth + 1,
+                            });
+                        }
+                    }
                 }
             }
         }
@@ -170,16 +175,30 @@ impl App {
 
     // ── Navigation ──
 
+    /// Clamp cursor to valid target after state changes.
+    fn clamp_cursor(&mut self) {
+        let targets = self.cursor_targets();
+        if targets.is_empty() {
+            self.cursor = 0;
+            return;
+        }
+        // Find nearest target
+        if let Some(&nearest) = targets.iter().min_by_key(|&&t| {
+            (t as isize - self.cursor as isize).unsigned_abs()
+        }) {
+            self.cursor = nearest;
+        }
+    }
+
     pub fn cursor_up(&mut self) {
         let targets = self.cursor_targets();
         if targets.is_empty() {
             return;
         }
-        // Find current position in targets
         let current_target_idx = targets
             .iter()
             .rposition(|&t| t <= self.cursor)
-            .unwrap_or(0);
+            .unwrap_or(targets.len() - 1);
         let new_idx = if current_target_idx == 0 {
             targets.len() - 1
         } else {
@@ -243,12 +262,32 @@ impl App {
         self.cursor = file_positions[current];
     }
 
+    /// Find the innermost folder path for a given file index.
+    fn parent_folder(&self, file_idx: usize) -> Option<String> {
+        self.files[file_idx]
+            .rel_path
+            .rfind('/')
+            .map(|i| self.files[file_idx].rel_path[..i].to_string())
+    }
+
+    /// Fold a folder and move cursor to it.
+    fn fold_folder(&mut self, folder: String) {
+        self.folded.insert(folder.clone());
+        let new_items = self.visible_items();
+        if let Some(pos) = new_items
+            .iter()
+            .position(|i| matches!(&i.kind, VisibleKind::Folder(p) if *p == folder))
+        {
+            self.cursor = pos;
+        }
+    }
+
     pub fn fold_current(&mut self) {
         let items = self.visible_items();
         match items.get(self.cursor).map(|i| &i.kind) {
             Some(VisibleKind::Folder(path)) => {
                 if self.folded.contains(path) {
-                    // Already folded — move to parent
+                    // Already folded — move to parent folder
                     if let Some(last_slash) = path.rfind('/') {
                         let parent = &path[..last_slash];
                         if let Some(pos) = items.iter().position(|i| {
@@ -262,15 +301,27 @@ impl App {
                 }
             }
             Some(VisibleKind::File(idx)) => {
-                if let Some(last_slash) = self.files[*idx].rel_path.rfind('/') {
-                    let parent = self.files[*idx].rel_path[..last_slash].to_string();
-                    self.folded.insert(parent.clone());
-                    let new_items = self.visible_items();
-                    if let Some(pos) = new_items.iter().position(|i| {
-                        matches!(&i.kind, VisibleKind::Folder(p) if *p == parent)
-                    }) {
-                        self.cursor = pos;
+                let idx = *idx;
+                if self.folded_files.contains(&idx) {
+                    // Already folded — fold parent folder instead
+                    if let Some(parent) = self.parent_folder(idx) {
+                        self.fold_folder(parent);
                     }
+                } else {
+                    self.folded_files.insert(idx);
+                }
+            }
+            Some(VisibleKind::HunkHeader(file_idx, _)) => {
+                let file_idx = *file_idx;
+                // Fold the file this hunk belongs to
+                self.folded_files.insert(file_idx);
+                // Move cursor to the file header
+                let new_items = self.visible_items();
+                if let Some(pos) = new_items
+                    .iter()
+                    .position(|i| matches!(&i.kind, VisibleKind::File(fi) if *fi == file_idx))
+                {
+                    self.cursor = pos;
                 }
             }
             _ => {}
@@ -279,16 +330,31 @@ impl App {
 
     pub fn unfold_current(&mut self) {
         let items = self.visible_items();
-        if let Some(VisibleKind::Folder(path)) = items.get(self.cursor).map(|i| &i.kind) {
-            if self.folded.contains(path) {
-                self.folded.remove(path);
-            } else if self.cursor + 1 < items.len() {
-                // Move to first child
-                let targets = self.cursor_targets();
-                if let Some(&next) = targets.iter().find(|&&t| t > self.cursor) {
-                    self.cursor = next;
+        match items.get(self.cursor).map(|i| &i.kind) {
+            Some(VisibleKind::Folder(path)) => {
+                if self.folded.contains(path) {
+                    self.folded.remove(path);
+                } else {
+                    // Move to first child
+                    let targets = self.cursor_targets();
+                    if let Some(&next) = targets.iter().find(|&&t| t > self.cursor) {
+                        self.cursor = next;
+                    }
                 }
             }
+            Some(VisibleKind::File(idx)) => {
+                let idx = *idx;
+                if self.folded_files.contains(&idx) {
+                    self.folded_files.remove(&idx);
+                } else {
+                    // Move to first hunk
+                    let targets = self.cursor_targets();
+                    if let Some(&next) = targets.iter().find(|&&t| t > self.cursor) {
+                        self.cursor = next;
+                    }
+                }
+            }
+            _ => {}
         }
     }
 
@@ -323,6 +389,7 @@ impl App {
             }
             _ => {}
         }
+        self.clamp_cursor();
     }
 
     pub fn invert_confirmation(&mut self) {
@@ -351,6 +418,7 @@ impl App {
             }
             _ => {}
         }
+        self.clamp_cursor();
     }
 
     pub fn toggle_and_advance(&mut self) {

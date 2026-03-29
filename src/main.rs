@@ -28,10 +28,17 @@ fn run() -> Result<()> {
     let mut input = String::new();
     io::stdin().read_to_string(&mut input)?;
 
+    if input.is_empty() {
+        panic!("stdin was empty — no diff piped in");
+    }
+
     let files = parser::parse_diff(&input);
     if files.is_empty() {
-        eprintln!("diffview: no diff content to display");
-        process::exit(0);
+        panic!(
+            "parsed 0 files from {} bytes of input.\nFirst 500 chars of input:\n{}",
+            input.len(),
+            &input[..input.len().min(500)]
+        );
     }
 
     let mut app = App::new(files);

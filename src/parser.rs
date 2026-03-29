@@ -1,9 +1,34 @@
 /// Parse unified (git) diff format from a string into a list of file entries.
 
+/// Strip ANSI escape sequences from input.
+fn strip_ansi(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut chars = input.chars();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            // Skip ESC [ ... (final byte is 0x40-0x7E)
+            if let Some(next) = chars.next() {
+                if next == '[' {
+                    for c2 in chars.by_ref() {
+                        if c2.is_ascii() && (0x40..=0x7E).contains(&(c2 as u8)) {
+                            break;
+                        }
+                    }
+                }
+                // else: skip the single char after ESC
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileStatus {
     Added,
     Modified,
+    Deleted,
 }
 
 #[derive(Debug, Clone)]
@@ -52,6 +77,7 @@ enum State {
 }
 
 pub fn parse_diff(input: &str) -> Vec<FileEntry> {
+    let clean = strip_ansi(input);
     let mut files: Vec<FileEntry> = Vec::new();
     let mut state = State::Init;
     let mut current_path = String::new();
@@ -59,7 +85,7 @@ pub fn parse_diff(input: &str) -> Vec<FileEntry> {
     let mut current_hunks: Vec<Hunk> = Vec::new();
     let mut is_delete_only = false;
 
-    for line in input.lines() {
+    for line in clean.lines() {
         match state {
             State::Init => {
                 if let Some(rest) = line.strip_prefix("diff --git ") {
@@ -93,7 +119,7 @@ pub fn parse_diff(input: &str) -> Vec<FileEntry> {
                 } else if line.starts_with("+++ /dev/null") {
                     is_delete_only = true;
                 } else if line.starts_with("--- ") || line.starts_with("+++ ") {
-                    // skip
+                    // file markers
                 } else if line.starts_with("@@ ") {
                     let header = parse_hunk_header(line);
                     current_hunks.push(Hunk {
@@ -104,8 +130,24 @@ pub fn parse_diff(input: &str) -> Vec<FileEntry> {
                         deletions: 0,
                     });
                     state = State::HunkContent;
+                } else if line.starts_with("index ")
+                    || line.starts_with("Binary files ")
+                    || line.starts_with("old mode ")
+                    || line.starts_with("new mode ")
+                    || line.starts_with("new file mode ")
+                    || line.starts_with("deleted file mode ")
+                    || line.starts_with("similarity index ")
+                    || line.starts_with("dissimilarity index ")
+                    || line.starts_with("rename from ")
+                    || line.starts_with("rename to ")
+                    || line.starts_with("copy from ")
+                    || line.starts_with("copy to ")
+                    || line.starts_with("GIT binary patch")
+                {
+                    // known git diff metadata
+                } else {
+                    panic!("unexpected line in FileHeader state: {:?}", line);
                 }
-                // Skip: index lines, Binary files, mode changes, etc.
             }
             State::HunkContent => {
                 if let Some(rest) = line.strip_prefix("diff --git ") {
@@ -146,8 +188,13 @@ pub fn parse_diff(input: &str) -> Vec<FileEntry> {
                     if let Some(hunk) = current_hunks.last_mut() {
                         hunk.lines.push(HunkLine::Context(rest.to_string()));
                     }
+                } else if line.starts_with("\\ No newline at end of file")
+                    || line.starts_with("Binary files ")
+                {
+                    // known non-diff lines within hunk context
+                } else {
+                    panic!("unexpected line in HunkContent state: {:?}", line);
                 }
-                // Skip: "\ No newline at end of file", etc.
             }
         }
     }
@@ -175,12 +222,11 @@ fn flush_file(
         return;
     }
 
-    // Filter out .lock files and delete-only files
-    if path.ends_with(".lock") || is_delete_only {
-        return;
-    }
+    let Some(mut status) = status else { return };
 
-    let Some(status) = status else { return };
+    if is_delete_only {
+        status = FileStatus::Deleted;
+    }
 
     let additions: usize = hunks.iter().map(|h| h.additions).sum();
     let deletions: usize = hunks.iter().map(|h| h.deletions).sum();
