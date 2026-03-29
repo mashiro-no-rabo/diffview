@@ -302,10 +302,17 @@ impl App {
             }
             Some(VisibleKind::File(idx)) => {
                 let idx = *idx;
-                if self.folded_files.contains(&idx) {
-                    // Already folded — fold parent folder instead
+                let visually_folded =
+                    self.folded_files.contains(&idx) || self.files[idx].all_confirmed();
+                if visually_folded {
+                    // Already folded — move cursor to parent folder (don't fold it)
                     if let Some(parent) = self.parent_folder(idx) {
-                        self.fold_folder(parent);
+                        let new_items = self.visible_items();
+                        if let Some(pos) = new_items.iter().position(|i| {
+                            matches!(&i.kind, VisibleKind::Folder(p) if *p == parent)
+                        }) {
+                            self.cursor = pos;
+                        }
                     }
                 } else {
                     self.folded_files.insert(idx);
