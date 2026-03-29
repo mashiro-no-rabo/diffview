@@ -1,0 +1,11 @@
+[package]
+name = "diffview"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+crossterm = { version = "0.29", features = ["use-dev-tty"] }
+ratatui = "0.30"
+anyhow = "1"
+thread_local = "1"
+memchr = "2"
