@@ -564,11 +564,15 @@ fn draw_main_view(frame: &mut Frame, app: &mut App, area: Rect) {
         focused_file,
     );
 
-    // Scrollbar
-    if total_height > area.height {
-        let mut scrollbar_state = ScrollbarState::new(total_height as usize)
-            .position(scroll as usize)
-            .viewport_content_length(area.height as usize);
+    // Scrollbar — based on cursor target index so it spans full range
+    let targets = app.cursor_targets();
+    if total_height > area.height && !targets.is_empty() {
+        let target_idx = targets
+            .iter()
+            .position(|&t| t >= cursor)
+            .unwrap_or(0);
+        let mut scrollbar_state = ScrollbarState::new(targets.len().saturating_sub(1))
+            .position(target_idx);
         frame.render_stateful_widget(
             Scrollbar::new(ScrollbarOrientation::VerticalRight)
                 .thumb_style(Style::default().fg(Color::Cyan))

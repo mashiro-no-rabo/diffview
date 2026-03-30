@@ -1,0 +1,5 @@
+---
+source: tests/output_format.rs
+expression: "format!(\"{label}: pos={pos} max={max}\")"
+---
+[hunk app/plugins/logging/output.rs.0]: pos=16 max=16

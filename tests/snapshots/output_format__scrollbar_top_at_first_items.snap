@@ -1,0 +1,7 @@
+---
+source: tests/output_format.rs
+expression: "lines.join(\"\\n\")"
+---
+[folder] app: pos=0 max=16
+app/core/engine/processor.rs: pos=2 max=16
+[hunk app/core/engine/processor.rs.0]: pos=3 max=16

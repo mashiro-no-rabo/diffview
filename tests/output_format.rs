@@ -9,8 +9,20 @@ mod fuzzy;
 #[path = "../src/model.rs"]
 mod model;
 
+#[path = "../src/ui.rs"]
+mod ui;
+
 use model::App;
 use parser::{format_confirmed_diff, parse_diff};
+use ratatui::Terminal;
+use ratatui::backend::TestBackend;
+
+fn render_app(app: &mut App, width: u16, height: u16) -> String {
+    let backend = TestBackend::new(width, height);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|frame| ui::draw(frame, app)).unwrap();
+    terminal.backend().to_string()
+}
 
 fn folder_items(app: &App) -> Vec<(String, usize)> {
     let items = app.visible_items();
@@ -676,6 +688,26 @@ fn j_then_k_round_trips() {
         &mut app,
         &["j", "j", "j", "k", "k", "k"]
     ));
+}
+
+#[test]
+fn render_scrollbar_at_top() {
+    let mut app = App::new(parse_diff(NAV_DIFF));
+    // Cursor starts at first folder — scrollbar should be at top
+    insta::assert_snapshot!(render_app(&mut app, 60, 20));
+}
+
+#[test]
+fn render_scrollbar_at_bottom() {
+    let mut app = App::new(parse_diff(NAV_DIFF));
+    // Navigate to last hunk
+    app.next_file(); // 1
+    app.next_file(); // 2
+    app.next_file(); // 3
+    app.next_file(); // 4
+    app.next_file(); // 5
+    app.cursor_down(); // last hunk
+    insta::assert_snapshot!(render_app(&mut app, 60, 20));
 }
 
 #[test]
