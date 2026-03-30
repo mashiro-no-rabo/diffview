@@ -111,7 +111,7 @@ fn event_loop(
                     app.should_exit = true;
                 }
 
-                KeyCode::Enter => app.toggle_and_advance(),
+                KeyCode::Enter => app.confirm_and_advance(),
 
                 KeyCode::Left => app.fold_current(),
                 KeyCode::Right => app.unfold_current(),
@@ -122,7 +122,7 @@ fn event_loop(
                 KeyCode::Char('j') => app.next_file(),
                 KeyCode::Char('k') => app.prev_file(),
 
-                KeyCode::Char(' ') => app.toggle_current(),
+                KeyCode::Char(' ') => app.confirm_and_advance(),
                 KeyCode::Char('a') => app.invert_confirmation(),
 
                 KeyCode::Char('?') => app.show_help = true,

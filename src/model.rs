@@ -419,34 +419,6 @@ impl App {
         }
     }
 
-    pub fn toggle_current(&mut self) {
-        let items = self.visible_items();
-        match items.get(self.cursor).map(|i| &i.kind) {
-            Some(VisibleKind::File(idx)) => {
-                let idx = *idx;
-                let new_state = !self.files[idx].all_confirmed();
-                self.toggle_file(idx, new_state);
-            }
-            Some(VisibleKind::Folder(path)) => {
-                let indices = self.files_under_folder(path);
-                let all_confirmed = indices.iter().all(|&i| self.files[i].all_confirmed());
-                let new_state = !all_confirmed;
-                for &i in &indices {
-                    self.toggle_file(i, new_state);
-                }
-            }
-            Some(VisibleKind::HunkHeader(file_idx, hunk_idx)) => {
-                let file_idx = *file_idx;
-                let hunk_idx = *hunk_idx;
-                if let Some(hunk) = self.files[file_idx].hunks.get_mut(hunk_idx) {
-                    hunk.confirmed = !hunk.confirmed;
-                }
-            }
-            _ => {}
-        }
-        self.clamp_cursor();
-    }
-
     fn invert_file(&mut self, idx: usize) {
         let file = &mut self.files[idx];
         if file.hunks.is_empty() {
@@ -483,9 +455,54 @@ impl App {
         self.clamp_cursor();
     }
 
-    pub fn toggle_and_advance(&mut self) {
-        self.toggle_current();
-        self.cursor_down();
+    pub fn confirm_and_advance(&mut self) {
+        let items = self.visible_items();
+        let targets = self.cursor_targets();
+        // Find current position in targets list for "advance without wrap"
+        let current_target_idx = targets.iter().position(|&t| t >= self.cursor);
+
+        match items.get(self.cursor).map(|i| &i.kind) {
+            Some(VisibleKind::File(idx)) => {
+                let idx = *idx;
+                self.toggle_file(idx, true);
+                self.folded_files.insert(idx);
+            }
+            Some(VisibleKind::Folder(path)) => {
+                let path = path.clone();
+                let indices = self.files_under_folder(&path);
+                for &i in &indices {
+                    self.toggle_file(i, true);
+                }
+                self.folded.insert(path);
+            }
+            Some(VisibleKind::HunkHeader(file_idx, hunk_idx)) => {
+                let file_idx = *file_idx;
+                let hunk_idx = *hunk_idx;
+                if let Some(hunk) = self.files[file_idx].hunks.get_mut(hunk_idx) {
+                    hunk.confirmed = true;
+                }
+            }
+            _ => {}
+        }
+
+        // Move to next item without wrapping
+        let new_targets = self.cursor_targets();
+        if new_targets.is_empty() {
+            self.cursor = 0;
+            return;
+        }
+        if let Some(ct_idx) = current_target_idx {
+            // Try to land on the same index in the new targets list,
+            // which is effectively the "next" item since the current one
+            // may have collapsed. If we're at/past the end, stay on last.
+            if ct_idx < new_targets.len() {
+                self.cursor = new_targets[ct_idx];
+            } else {
+                self.cursor = *new_targets.last().unwrap();
+            }
+        } else {
+            self.clamp_cursor();
+        }
     }
 
     // ── File list popup ──
