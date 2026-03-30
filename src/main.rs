@@ -3,7 +3,7 @@ mod model;
 mod parser;
 mod ui;
 
-use std::io::{self, Read, Write};
+use std::io::{self, Read};
 use std::process;
 
 use anyhow::Result;
@@ -58,15 +58,7 @@ fn run() -> Result<()> {
     crossterm::execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
 
-    result?;
-
-    // Output confirmed hunks as unified diff
-    let output = parser::format_confirmed_diff(&app.files);
-    if !output.is_empty() {
-        io::stdout().write_all(output.as_bytes())?;
-    }
-
-    Ok(())
+    result
 }
 
 fn event_loop(

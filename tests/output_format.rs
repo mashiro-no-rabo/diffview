@@ -646,6 +646,7 @@ fn highlighted_file(app: &App) -> String {
 }
 
 fn trace_navigation(app: &mut App, keys: &[&str]) -> String {
+    // Include "left" and "right" in addition to j/k/up/down
     let mut lines = Vec::new();
     lines.push(format!("start: {}", highlighted_file(app)));
     for &key in keys {
@@ -654,6 +655,8 @@ fn trace_navigation(app: &mut App, keys: &[&str]) -> String {
             "k" => app.prev_file(),
             "down" => app.cursor_down(),
             "up" => app.cursor_up(),
+            "left" => app.fold_current(),
+            "right" => app.unfold_current(),
             _ => {}
         }
         lines.push(format!("{:>5}: {}", key, highlighted_file(app)));
@@ -799,6 +802,45 @@ fn render_mixed_types_at_deleted() {
     app.next_file(); // Cargo.lock
     app.next_file(); // old_util.rs (deleted, folded by default)
     insta::assert_snapshot!(render_app(&mut app, 60, 25));
+}
+
+#[test]
+fn left_on_file_goes_to_parent_folder() {
+    let mut app = App::new(parse_diff(NAV_DIFF));
+    // Navigate to first file, then press left — should go to parent folder, NOT fold
+    insta::assert_snapshot!(trace_navigation(
+        &mut app,
+        &["j", "left"]
+    ));
+}
+
+#[test]
+fn left_on_hunk_goes_to_file() {
+    let mut app = App::new(parse_diff(NAV_DIFF));
+    // Navigate to first file, then down to hunk, then left — should go to file
+    insta::assert_snapshot!(trace_navigation(
+        &mut app,
+        &["j", "down", "left"]
+    ));
+}
+
+#[test]
+fn left_on_file_then_left_on_folder() {
+    let mut app = App::new(parse_diff(NAV_DIFF));
+    // j to file, left to parent folder, left folds it, left to grandparent
+    insta::assert_snapshot!(trace_navigation(
+        &mut app,
+        &["j", "j", "left", "left", "left"]
+    ));
+}
+
+#[test]
+fn render_left_on_file_keeps_content() {
+    let mut app = App::new(parse_diff(NAV_DIFF));
+    app.next_file(); // go to processor.rs
+    app.fold_current(); // press left
+    // File content should still be visible (not folded)
+    insta::assert_snapshot!(render_app(&mut app, 60, 20));
 }
 
 #[test]

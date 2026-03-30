@@ -1,0 +1,7 @@
+---
+source: tests/output_format.rs
+expression: "trace_navigation(&mut app, &[\"j\", \"left\"])"
+---
+start: [folder] app
+    j: app/core/engine/processor.rs
+ left: [folder] app/core/engine
