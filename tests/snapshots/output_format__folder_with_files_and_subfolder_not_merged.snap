@@ -1,0 +1,14 @@
+---
+source: tests/output_format.rs
+expression: folder_items(&app)
+---
+[
+    (
+        "src",
+        0,
+    ),
+    (
+        "src/app",
+        1,
+    ),
+]

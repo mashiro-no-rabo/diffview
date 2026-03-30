@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::fuzzy::{ArinaeMatcher, CaseMatching};
 use crate::parser::FileEntry;
@@ -19,8 +19,9 @@ pub struct VisibleItem {
 
 pub struct App {
     pub files: Vec<FileEntry>,
-    pub folded: HashSet<String>,        // folded folder paths
-    pub folded_files: HashSet<usize>,   // folded file indices (hunks hidden)
+    merged_folder_stacks: Vec<Vec<String>>, // per-file merged folder paths
+    pub folded: HashSet<String>,            // folded folder paths
+    pub folded_files: HashSet<usize>,       // folded file indices (hunks hidden)
     pub cursor: usize,
     pub scroll_offset: usize,
     pub should_exit: bool,
@@ -31,20 +32,83 @@ pub struct App {
     matcher: ArinaeMatcher,
 }
 
+/// Precompute merged folder stacks: single-child folder chains are collapsed
+/// so navigation skips through them in one step.
+fn compute_merged_folder_stacks(files: &[FileEntry]) -> Vec<Vec<String>> {
+    struct Node {
+        children: HashMap<String, Node>,
+        has_files: bool,
+    }
+
+    let mut root = Node {
+        children: HashMap::new(),
+        has_files: false,
+    };
+
+    for file in files {
+        let parts: Vec<&str> = file.rel_path.split('/').collect();
+        let mut node = &mut root;
+        for &part in &parts[..parts.len().saturating_sub(1)] {
+            node = node
+                .children
+                .entry(part.to_string())
+                .or_insert_with(|| Node {
+                    children: HashMap::new(),
+                    has_files: false,
+                });
+        }
+        node.has_files = true;
+    }
+
+    files
+        .iter()
+        .map(|file| {
+            let parts: Vec<&str> = file.rel_path.split('/').collect();
+            let folder_parts = &parts[..parts.len().saturating_sub(1)];
+
+            let mut stack = Vec::new();
+            let mut node = &root;
+            let mut accumulated = String::new();
+
+            for &part in folder_parts {
+                if !accumulated.is_empty() {
+                    accumulated.push('/');
+                }
+                accumulated.push_str(part);
+
+                let child = &node.children[part];
+
+                // Emit unless this folder has exactly one subfolder child and no direct files
+                if child.children.len() != 1 || child.has_files {
+                    stack.push(accumulated.clone());
+                }
+
+                node = child;
+            }
+
+            stack
+        })
+        .collect()
+}
+
 impl App {
     pub fn new(files: Vec<FileEntry>) -> Self {
-        // Default fold .lock files and deleted files
+        // Default fold .lock files, deleted files, and binary files
         let mut folded_files = HashSet::new();
         for (idx, file) in files.iter().enumerate() {
             if file.rel_path.ends_with(".lock")
                 || file.status == crate::parser::FileStatus::Deleted
+                || file.binary
             {
                 folded_files.insert(idx);
             }
         }
 
+        let merged_folder_stacks = compute_merged_folder_stacks(&files);
+
         Self {
             files,
+            merged_folder_stacks,
             folded: HashSet::new(),
             folded_files,
             cursor: 0,
@@ -66,26 +130,20 @@ impl App {
         let mut emitted_folders: HashSet<String> = HashSet::new();
 
         for (file_idx, file) in self.files.iter().enumerate() {
-            let parts: Vec<&str> = file.rel_path.split('/').collect();
+            let folder_stack = &self.merged_folder_stacks[file_idx];
             let mut hidden = false;
-            let mut current_path = String::new();
 
-            // Emit folder nodes
-            for (depth, part) in parts[..parts.len() - 1].iter().enumerate() {
-                if depth > 0 {
-                    current_path.push('/');
-                }
-                current_path.push_str(part);
-
-                if !emitted_folders.contains(&current_path) {
-                    emitted_folders.insert(current_path.clone());
+            // Emit merged folder nodes
+            for (depth, folder_path) in folder_stack.iter().enumerate() {
+                if !emitted_folders.contains(folder_path) {
+                    emitted_folders.insert(folder_path.clone());
                     items.push(VisibleItem {
-                        kind: VisibleKind::Folder(current_path.clone()),
+                        kind: VisibleKind::Folder(folder_path.clone()),
                         depth,
                     });
                 }
 
-                if self.folded.contains(&current_path) {
+                if self.folded.contains(folder_path) {
                     hidden = true;
                     break;
                 }
@@ -95,7 +153,7 @@ impl App {
                 continue;
             }
 
-            let file_depth = parts.len() - 1;
+            let file_depth = folder_stack.len();
 
             // File header (always shown)
             items.push(VisibleItem {
@@ -107,13 +165,11 @@ impl App {
             let file_folded = self.folded_files.contains(&file_idx) || file.all_confirmed();
             if !file_folded {
                 for (hunk_idx, hunk) in file.hunks.iter().enumerate() {
-                    // Hunk header always visible
                     items.push(VisibleItem {
                         kind: VisibleKind::HunkHeader(file_idx, hunk_idx),
                         depth: file_depth + 1,
                     });
 
-                    // Hunk lines hidden if hunk is confirmed (folded)
                     if !hunk.confirmed {
                         for (line_idx, _) in hunk.lines.iter().enumerate() {
                             items.push(VisibleItem {
@@ -159,18 +215,12 @@ impl App {
         !indices.is_empty() && indices.iter().all(|&i| self.files[i].all_confirmed())
     }
 
-    pub fn folder_none_confirmed(&self, folder_path: &str) -> bool {
-        self.files_under_folder(folder_path)
-            .iter()
-            .all(|&i| self.files[i].none_confirmed())
-    }
-
     pub fn total_confirmed_hunks(&self) -> usize {
         self.files.iter().map(|f| f.confirmed_count()).sum()
     }
 
     pub fn total_hunks(&self) -> usize {
-        self.files.iter().map(|f| f.hunks.len()).sum()
+        self.files.iter().map(|f| f.total_units()).sum()
     }
 
     // ── Navigation ──
@@ -262,24 +312,23 @@ impl App {
         self.cursor = file_positions[current];
     }
 
-    /// Find the innermost folder path for a given file index.
+    /// Find the innermost merged folder for a given file.
     fn parent_folder(&self, file_idx: usize) -> Option<String> {
-        self.files[file_idx]
-            .rel_path
-            .rfind('/')
-            .map(|i| self.files[file_idx].rel_path[..i].to_string())
+        self.merged_folder_stacks[file_idx].last().cloned()
     }
 
-    /// Fold a folder and move cursor to it.
-    fn fold_folder(&mut self, folder: String) {
-        self.folded.insert(folder.clone());
-        let new_items = self.visible_items();
-        if let Some(pos) = new_items
-            .iter()
-            .position(|i| matches!(&i.kind, VisibleKind::Folder(p) if *p == folder))
-        {
-            self.cursor = pos;
+    /// Find the parent merged folder of a given folder path.
+    fn parent_merged_folder(&self, folder_path: &str) -> Option<String> {
+        for stack in &self.merged_folder_stacks {
+            if let Some(pos) = stack.iter().position(|p| p == folder_path) {
+                return if pos > 0 {
+                    Some(stack[pos - 1].clone())
+                } else {
+                    None
+                };
+            }
         }
+        None
     }
 
     pub fn fold_current(&mut self) {
@@ -288,10 +337,9 @@ impl App {
             Some(VisibleKind::Folder(path)) => {
                 if self.folded.contains(path) {
                     // Already folded — move to parent folder
-                    if let Some(last_slash) = path.rfind('/') {
-                        let parent = &path[..last_slash];
+                    if let Some(parent) = self.parent_merged_folder(path) {
                         if let Some(pos) = items.iter().position(|i| {
-                            matches!(&i.kind, VisibleKind::Folder(p) if p == parent)
+                            matches!(&i.kind, VisibleKind::Folder(p) if *p == parent)
                         }) {
                             self.cursor = pos;
                         }
@@ -367,24 +415,31 @@ impl App {
 
     // ── Selection/Confirmation ──
 
+    fn toggle_file(&mut self, idx: usize, state: bool) {
+        let file = &mut self.files[idx];
+        if file.hunks.is_empty() {
+            file.confirmed = state;
+        } else {
+            for hunk in &mut file.hunks {
+                hunk.confirmed = state;
+            }
+        }
+    }
+
     pub fn toggle_current(&mut self) {
         let items = self.visible_items();
         match items.get(self.cursor).map(|i| &i.kind) {
             Some(VisibleKind::File(idx)) => {
                 let idx = *idx;
                 let new_state = !self.files[idx].all_confirmed();
-                for hunk in &mut self.files[idx].hunks {
-                    hunk.confirmed = new_state;
-                }
+                self.toggle_file(idx, new_state);
             }
             Some(VisibleKind::Folder(path)) => {
                 let indices = self.files_under_folder(path);
                 let all_confirmed = indices.iter().all(|&i| self.files[i].all_confirmed());
                 let new_state = !all_confirmed;
                 for &i in &indices {
-                    for hunk in &mut self.files[i].hunks {
-                        hunk.confirmed = new_state;
-                    }
+                    self.toggle_file(i, new_state);
                 }
             }
             Some(VisibleKind::HunkHeader(file_idx, hunk_idx)) => {
@@ -399,21 +454,28 @@ impl App {
         self.clamp_cursor();
     }
 
+    fn invert_file(&mut self, idx: usize) {
+        let file = &mut self.files[idx];
+        if file.hunks.is_empty() {
+            file.confirmed = !file.confirmed;
+        } else {
+            for hunk in &mut file.hunks {
+                hunk.confirmed = !hunk.confirmed;
+            }
+        }
+    }
+
     pub fn invert_confirmation(&mut self) {
         let items = self.visible_items();
         match items.get(self.cursor).map(|i| &i.kind) {
             Some(VisibleKind::File(idx)) => {
                 let idx = *idx;
-                for hunk in &mut self.files[idx].hunks {
-                    hunk.confirmed = !hunk.confirmed;
-                }
+                self.invert_file(idx);
             }
             Some(VisibleKind::Folder(path)) => {
                 let indices = self.files_under_folder(path);
                 for &i in &indices {
-                    for hunk in &mut self.files[i].hunks {
-                        hunk.confirmed = !hunk.confirmed;
-                    }
+                    self.invert_file(i);
                 }
             }
             Some(VisibleKind::HunkHeader(file_idx, hunk_idx)) => {

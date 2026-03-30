@@ -2,7 +2,10 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
+use ratatui::widgets::{
+    Block, Borders, Clear, List, ListItem, ListState, Paragraph, Scrollbar, ScrollbarOrientation,
+    ScrollbarState, Wrap,
+};
 
 use crate::model::{App, VisibleKind};
 use crate::parser::{FileStatus, HunkLine};
@@ -114,10 +117,37 @@ fn build_segment_tree<'a>(app: &'a App, cursor: usize) -> Vec<Segment<'a>> {
                 if let Some(fd) = current_file.take() {
                     file_datas.push(fd);
                 }
+                let mut lines = Vec::new();
+                let file = &app.files[*file_idx];
+
+                // For binary or no-hunk files, add an info line
+                if file.hunks.is_empty() && !app.folded_files.contains(file_idx) && !file.all_confirmed() {
+                    let msg = if file.binary {
+                        match (file.binary_old_size, file.binary_new_size) {
+                            (Some(_), Some(new)) if file.status == FileStatus::Added => {
+                                format!("  Binary file ({} bytes)", new)
+                            }
+                            (Some(old), Some(_)) if file.status == FileStatus::Deleted => {
+                                format!("  Binary file (was {} bytes)", old)
+                            }
+                            (Some(old), Some(new)) => {
+                                format!("  Binary file ({} → {} bytes)", old, new)
+                            }
+                            _ => "  Binary file".to_string(),
+                        }
+                    } else {
+                        "  Mode change only".to_string()
+                    };
+                    lines.push(Line::from(Span::styled(
+                        msg,
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                }
+
                 current_file = Some(FileData {
                     folder_stack: current_folder_stack.clone(),
                     file_idx: *file_idx,
-                    lines: Vec::new(),
+                    lines,
                 });
             }
             VisibleKind::HunkHeader(file_idx, hunk_idx) => {
@@ -241,8 +271,20 @@ fn build_segment_tree<'a>(app: &'a App, cursor: usize) -> Vec<Segment<'a>> {
                     i += 1;
                 }
                 let children = nest_files(&mut files[start..i], depth + 1);
+                // Display name: relative to parent merged folder
+                let display_name = if depth > 0 {
+                    let parent = &files[start].folder_stack[depth - 1];
+                    folder_path
+                        .strip_prefix(parent)
+                        .and_then(|s| s.strip_prefix('/'))
+                        .unwrap_or(&folder_path)
+                        .to_string()
+                } else {
+                    folder_path.clone()
+                };
+
                 segments.push(Segment::Folder {
-                    path: folder_path.rsplit('/').next().unwrap_or(&folder_path).to_string(),
+                    path: display_name,
                     full_path: folder_path,
                     children,
                 });
@@ -262,45 +304,7 @@ fn build_segment_tree<'a>(app: &'a App, cursor: usize) -> Vec<Segment<'a>> {
         segments
     }
 
-    let mut segments = nest_files(&mut file_datas, 0);
-
-    // Compress single-child folder chains
-    compress_folders(&mut segments);
-
-    segments
-}
-
-/// Merge folder chains: if a folder has exactly one child and it's a folder,
-/// merge them into one block with combined name.
-fn compress_folders(segments: &mut Vec<Segment>) {
-    for seg in segments.iter_mut() {
-        if let Segment::Folder {
-            path,
-            full_path,
-            children,
-        } = seg
-        {
-            // First compress children recursively
-            compress_folders(children);
-
-            // Then check if we should merge with single folder child
-            while children.len() == 1 {
-                if let Segment::Folder {
-                    path: child_path,
-                    full_path: child_full,
-                    children: child_children,
-                } = &mut children[0]
-                {
-                    *path = format!("{}/{}", path, child_path);
-                    *full_path = child_full.clone();
-                    let grandchildren = std::mem::take(child_children);
-                    *children = grandchildren;
-                } else {
-                    break;
-                }
-            }
-        }
-    }
+    nest_files(&mut file_datas, 0)
 }
 
 fn segment_height(seg: &Segment) -> u16 {
@@ -439,12 +443,31 @@ fn render_segments(
                     FileStatus::Modified => "M",
                     FileStatus::Added => "A",
                     FileStatus::Deleted => "D",
+                    FileStatus::Renamed => "R",
+                    FileStatus::Copied => "C",
                 };
 
-                let title = format!(
-                    " [{}] {} {}  {}  +{} -{} ",
-                    check, fold_icon, name, status_char, file.additions, file.deletions
-                );
+                let title = if file.binary {
+                    let size_info = match (file.binary_old_size, file.binary_new_size) {
+                        (Some(_), Some(new)) if file.status == FileStatus::Added => {
+                            format!("  {} bytes", new)
+                        }
+                        (Some(old), Some(_)) if file.status == FileStatus::Deleted => {
+                            format!("  was {} bytes", old)
+                        }
+                        (Some(old), Some(new)) => format!("  {} → {} bytes", old, new),
+                        _ => String::new(),
+                    };
+                    format!(
+                        " [{}] {} {}  {} BIN{} ",
+                        check, fold_icon, name, status_char, size_info
+                    )
+                } else {
+                    format!(
+                        " [{}] {} {}  {}  +{} -{} ",
+                        check, fold_icon, name, status_char, file.additions, file.deletions
+                    )
+                };
 
                 let is_focused = focused_file == Some(*file_idx);
                 let border_color = if is_focused {
@@ -520,6 +543,7 @@ fn draw_main_view(frame: &mut Frame, app: &mut App, area: Rect) {
     });
 
     let segments = build_segment_tree(app, cursor);
+    let total_height: u16 = segments.iter().map(|s| segment_height(s)).sum();
 
     let scroll = compute_scroll_nested(
         cursor,
@@ -539,6 +563,20 @@ fn draw_main_view(frame: &mut Frame, app: &mut App, area: Rect) {
         focused_folder.as_deref(),
         focused_file,
     );
+
+    // Scrollbar
+    if total_height > area.height {
+        let mut scrollbar_state = ScrollbarState::new(total_height as usize)
+            .position(scroll as usize)
+            .viewport_content_length(area.height as usize);
+        frame.render_stateful_widget(
+            Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                .thumb_style(Style::default().fg(Color::Cyan))
+                .track_style(Style::default().fg(Color::DarkGray)),
+            area,
+            &mut scrollbar_state,
+        );
+    }
 
     app.scroll_offset = scroll as usize;
 }
@@ -586,11 +624,15 @@ fn compute_scroll_nested(
 
     let offset = offset.unwrap_or(0) as u16;
 
-    if offset < current_scroll {
-        return offset.saturating_sub(1);
+    // Use a margin to absorb drift between find_y_offset (linear model) and
+    // render_segments (nested block borders re-rendered at viewport top).
+    let margin = visible_height / 4;
+
+    if offset < current_scroll + margin {
+        return offset.saturating_sub(margin);
     }
 
-    if offset >= current_scroll + visible_height {
+    if offset + margin >= current_scroll + visible_height {
         return offset.saturating_sub(visible_height / 2);
     }
 
@@ -795,6 +837,8 @@ fn draw_file_list_popup(frame: &mut Frame, app: &mut App) {
             FileStatus::Modified => ("M", Color::Yellow),
             FileStatus::Added => ("A", Color::Green),
             FileStatus::Deleted => ("D", Color::Red),
+            FileStatus::Renamed => ("R", Color::Blue),
+            FileStatus::Copied => ("C", Color::Blue),
         };
 
         let path = &file.rel_path;

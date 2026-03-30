@@ -1,0 +1,17 @@
+---
+source: tests/output_format.rs
+expression: format_confirmed_diff(&files)
+---
+diff --git a/src/foo.rs b/src/foo.rs
+--- a/src/foo.rs
++++ b/src/foo.rs
+@@ -1,3 +1,4 @@
+ line1
++added
+ line2
+ line3
+@@ -10,3 +11,3 @@
+ ctx
+-old
++new
+ ctx

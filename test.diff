@@ -1,0 +1,60 @@
+diff --git a/next/components/shop-floor/orders/auto-schedule-step3-generate.tsx b/next/components/shop-floor/orders/auto-schedule-step3-generate.tsx
+index 2cff4638da..64f474ba4f 100644
+--- a/next/components/shop-floor/orders/auto-schedule-step3-generate.tsx
++++ b/next/components/shop-floor/orders/auto-schedule-step3-generate.tsx
+@@ -90,6 +90,7 @@
+   minimize_tardiness: "shop_floor_scheduler._auto_schedule.objective_minimize_tardiness",
+   minimize_earliness: "shop_floor_scheduler._auto_schedule.objective_minimize_earliness",
+   minimize_changeover_time: "shop_floor_scheduler._auto_schedule.objective_minimize_changeover_time",
++  minimize_late_orders: "shop_floor_scheduler._auto_schedule.objective_minimize_late_orders",
+   minimize_missed_orders: "shop_floor_scheduler._auto_schedule.objective_minimize_missed_orders",
+ };
+
+diff --git a/next/public/locales/de/shop-floor-scheduler.json b/next/public/locales/de/shop-floor-scheduler.json
+index f1918833dc..5746b8b5fb 100644
+--- a/next/public/locales/de/shop-floor-scheduler.json
++++ b/next/public/locales/de/shop-floor-scheduler.json
+@@ -26,6 +26,7 @@
+     "not_placed": "not placed",
+     "objective_minimize_changeover_time": "changeover",
+     "objective_minimize_earliness": "earliness",
++    "objective_minimize_late_orders": "late orders #",
+     "objective_minimize_missed_orders": "missed orders",
+     "objective_minimize_tardiness": "late orders",
+     "order_selection_count": "{{selected}} / {{total}}",
+diff --git a/next/public/locales/en/shop-floor-scheduler.json b/next/public/locales/en/shop-floor-scheduler.json
+index e56b05cdfc..6a401a49fe 100644
+--- a/next/public/locales/en/shop-floor-scheduler.json
++++ b/next/public/locales/en/shop-floor-scheduler.json
+@@ -26,6 +26,7 @@
+     "not_placed": "not placed",
+     "objective_minimize_changeover_time": "changeover",
+     "objective_minimize_earliness": "earliness",
++    "objective_minimize_late_orders": "late orders #",
+     "objective_minimize_missed_orders": "missed orders",
+     "objective_minimize_tardiness": "late orders",
+     "order_selection_count": "{{selected}} / {{total}}",
+diff --git a/next/public/locales/es/shop-floor-scheduler.json b/next/public/locales/es/shop-floor-scheduler.json
+index 3cefe4fdc9..ee3ce04549 100644
+--- a/next/public/locales/es/shop-floor-scheduler.json
++++ b/next/public/locales/es/shop-floor-scheduler.json
+@@ -26,6 +26,7 @@
+     "not_placed": "not placed",
+     "objective_minimize_changeover_time": "changeover",
+     "objective_minimize_earliness": "earliness",
++    "objective_minimize_late_orders": "late orders #",
+     "objective_minimize_missed_orders": "missed orders",
+     "objective_minimize_tardiness": "late orders",
+     "order_selection_count": "{{selected}} / {{total}}",
+diff --git a/next/public/locales/is/shop-floor-scheduler.json b/next/public/locales/is/shop-floor-scheduler.json
+index 381ceb0081..d8924cb2a7 100644
+--- a/next/public/locales/is/shop-floor-scheduler.json
++++ b/next/public/locales/is/shop-floor-scheduler.json
+@@ -26,6 +26,7 @@
+     "not_placed": "not placed",
+     "objective_minimize_changeover_time": "changeover",
+     "objective_minimize_earliness": "earliness",
++    "objective_minimize_late_orders": "late orders #",
+     "objective_minimize_missed_orders": "missed orders",
+     "objective_minimize_tardiness": "late orders",
+     "order_selection_count": "{{selected}} / {{total}}",

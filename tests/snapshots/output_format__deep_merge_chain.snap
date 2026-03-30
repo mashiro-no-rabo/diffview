@@ -1,0 +1,10 @@
+---
+source: tests/output_format.rs
+expression: folder_items(&app)
+---
+[
+    (
+        "a/b/c/d",
+        0,
+    ),
+]

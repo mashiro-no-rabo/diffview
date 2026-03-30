@@ -1,0 +1,12 @@
+---
+source: tests/output_format.rs
+expression: format_confirmed_diff(&files)
+---
+diff --git a/image.png b/image.png
+index abc1234..def5678 100644
+GIT binary patch
+literal 2048
+zcmVdata
+
+literal 1024
+zcmVolddata

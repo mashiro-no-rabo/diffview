@@ -1,0 +1,23 @@
+---
+source: tests/output_format.rs
+expression: format_confirmed_diff(&files)
+---
+diff --git a/src/main.rs b/src/main.rs
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -1,3 +1,4 @@
+ line1
++added
+ line2
+ line3
+diff --git a/image.png b/image.png
+index abc..def 100644
+Binary files a/image.png and b/image.png differ
+diff --git a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -10,3 +11,3 @@
+ ctx
+-old
++new
+ ctx

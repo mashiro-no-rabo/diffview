@@ -1,0 +1,11 @@
+---
+source: tests/output_format.rs
+expression: format_confirmed_diff(&files)
+---
+diff --git a/src/foo.rs b/src/foo.rs
+new file mode 100644
+--- /dev/null
++++ b/src/foo.rs
+@@ -5,0 +6,2 @@
++new1
++new2

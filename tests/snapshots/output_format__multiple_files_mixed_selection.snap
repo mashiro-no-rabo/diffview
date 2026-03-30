@@ -1,0 +1,19 @@
+---
+source: tests/output_format.rs
+expression: format_confirmed_diff(&files)
+---
+diff --git a/src/a.rs b/src/a.rs
+--- a/src/a.rs
++++ b/src/a.rs
+@@ -1,3 +1,4 @@
+ line1
++added
+ line2
+ line3
+diff --git a/src/c.rs b/src/c.rs
+--- a/src/c.rs
++++ b/src/c.rs
+@@ -20,2 +20,3 @@
+ before
++inserted
+ after

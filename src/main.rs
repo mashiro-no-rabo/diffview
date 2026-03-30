@@ -3,7 +3,7 @@ mod model;
 mod parser;
 mod ui;
 
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::process;
 
 use anyhow::Result;
@@ -29,7 +29,8 @@ fn run() -> Result<()> {
     io::stdin().read_to_string(&mut input)?;
 
     if input.is_empty() {
-        panic!("stdin was empty — no diff piped in");
+        eprintln!("No diff to review.");
+        return Ok(());
     }
 
     let files = parser::parse_diff(&input);
@@ -57,7 +58,15 @@ fn run() -> Result<()> {
     crossterm::execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
 
-    result
+    result?;
+
+    // Output confirmed hunks as unified diff
+    let output = parser::format_confirmed_diff(&app.files);
+    if !output.is_empty() {
+        io::stdout().write_all(output.as_bytes())?;
+    }
+
+    Ok(())
 }
 
 fn event_loop(

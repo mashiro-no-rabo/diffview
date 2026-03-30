@@ -9,3 +9,6 @@ ratatui = "0.30"
 anyhow = "1"
 thread_local = "1"
 memchr = "2"
+
+[dev-dependencies]
+insta = "1.47.1"

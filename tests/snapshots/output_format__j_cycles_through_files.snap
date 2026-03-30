@@ -1,0 +1,11 @@
+---
+source: tests/output_format.rs
+expression: "trace_navigation(&mut app, &[\"j\", \"j\", \"j\", \"j\", \"j\", \"j\"])"
+---
+start: [folder] app
+    j: app/core/engine/processor.rs
+    j: app/plugins/auth/login.rs
+    j: app/plugins/storage/cache.rs
+    j: app/plugins/network/client.rs
+    j: app/plugins/logging/output.rs
+    j: app/core/engine/processor.rs

@@ -1,0 +1,18 @@
+---
+source: tests/output_format.rs
+expression: folder_items(&app)
+---
+[
+    (
+        "src/app",
+        0,
+    ),
+    (
+        "src/app/components",
+        1,
+    ),
+    (
+        "src/app/utils",
+        1,
+    ),
+]

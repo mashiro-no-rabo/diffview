@@ -1,0 +1,7 @@
+---
+source: tests/output_format.rs
+expression: format_confirmed_diff(&files)
+---
+diff --git a/script.sh b/script.sh
+old mode 100644
+new mode 100755
