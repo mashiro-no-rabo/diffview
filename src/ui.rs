@@ -564,15 +564,13 @@ fn draw_main_view(frame: &mut Frame, app: &mut App, area: Rect) {
         focused_file,
     );
 
-    // Scrollbar — based on cursor target index so it spans full range
-    let targets = app.cursor_targets();
-    if total_height > area.height && !targets.is_empty() {
-        let target_idx = targets
-            .iter()
-            .position(|&t| t >= cursor)
-            .unwrap_or(0);
-        let mut scrollbar_state = ScrollbarState::new(targets.len().saturating_sub(1))
-            .position(target_idx);
+    // Scrollbar — evenly divided by hunk/unit count
+    let total_units: usize = app.files.iter().map(|f| f.total_units()).sum();
+    if total_height > area.height && total_units > 0 {
+        let unit_pos = cursor_unit_position(app, cursor, &visible);
+        let mut scrollbar_state = ScrollbarState::new(total_units)
+            .position(unit_pos)
+            .viewport_content_length(1);
         frame.render_stateful_widget(
             Scrollbar::new(ScrollbarOrientation::VerticalRight)
                 .thumb_style(Style::default().fg(Color::Cyan))
@@ -583,6 +581,42 @@ fn draw_main_view(frame: &mut Frame, app: &mut App, area: Rect) {
     }
 
     app.scroll_offset = scroll as usize;
+}
+
+/// Map cursor position to a sequential hunk/unit index for the scrollbar.
+/// Folders and files map to the first unit of the first file they contain.
+fn cursor_unit_position(
+    app: &App,
+    cursor: usize,
+    visible: &[crate::model::VisibleItem],
+) -> usize {
+    let cursor_item = match visible.get(cursor) {
+        Some(vi) => vi,
+        None => return 0,
+    };
+
+    // Cumulative unit offset for a file index
+    let file_unit_offset = |file_idx: usize| -> usize {
+        app.files[..file_idx]
+            .iter()
+            .map(|f| f.total_units())
+            .sum()
+    };
+
+    match &cursor_item.kind {
+        VisibleKind::HunkHeader(file_idx, hunk_idx) => file_unit_offset(*file_idx) + hunk_idx,
+        VisibleKind::File(file_idx) => file_unit_offset(*file_idx),
+        VisibleKind::Folder(path) => {
+            let prefix = format!("{}/", path);
+            for (i, file) in app.files.iter().enumerate() {
+                if file.rel_path.starts_with(&prefix) {
+                    return file_unit_offset(i);
+                }
+            }
+            0
+        }
+        VisibleKind::HunkLine(file_idx, hunk_idx, _) => file_unit_offset(*file_idx) + hunk_idx,
+    }
 }
 
 fn compute_scroll_nested(
@@ -628,8 +662,25 @@ fn compute_scroll_nested(
 
     let offset = offset.unwrap_or(0) as u16;
 
-    // Use a margin to absorb drift between find_y_offset (linear model) and
-    // render_segments (nested block borders re-rendered at viewport top).
+    // For files and hunks: anchor scroll to parent folder so siblings are out of view.
+    if matches!(
+        cursor_kind,
+        Some(
+            VisibleKind::File(_)
+                | VisibleKind::HunkHeader(_, _)
+                | VisibleKind::HunkLine(_, _, _)
+        )
+    ) {
+        let parent_y = parent_folder_y(cursor, visible, segments);
+        if offset >= parent_y && offset - parent_y < visible_height {
+            // Parent folder and cursor both fit — anchor at parent
+            return parent_y;
+        }
+        // Cursor too far from parent folder — center on cursor
+        return offset.saturating_sub(visible_height / 2);
+    }
+
+    // For folders: use margin-based approach
     let margin = visible_height / 4;
 
     if offset < current_scroll + margin {
@@ -641,6 +692,26 @@ fn compute_scroll_nested(
     }
 
     current_scroll
+}
+
+/// Walk backwards from cursor to find the nearest parent folder's y offset.
+fn parent_folder_y(
+    cursor: usize,
+    visible: &[crate::model::VisibleItem],
+    segments: &[Segment],
+) -> u16 {
+    for i in (0..cursor).rev() {
+        if let VisibleKind::Folder(path) = &visible[i].kind {
+            let mut state = FindState {
+                y: 0,
+                line_counter: 0,
+            };
+            if let Some(y) = find_y_offset(segments, &SearchTarget::Folder(path), &mut state) {
+                return y as u16;
+            }
+        }
+    }
+    0
 }
 
 enum SearchTarget<'a> {

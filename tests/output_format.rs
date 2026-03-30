@@ -710,6 +710,97 @@ fn render_scrollbar_at_bottom() {
     insta::assert_snapshot!(render_app(&mut app, 60, 20));
 }
 
+// Diff with binary, .lock, deleted, and renamed files mixed with normal hunks.
+const MIXED_TYPES_DIFF: &str = "\
+diff --git a/src/main.rs b/src/main.rs
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -1,4 +1,5 @@
+ fn main() {
++    init_logger();
+     let config = load();
+     run(config);
+ }
+@@ -20,3 +21,4 @@
+ fn shutdown() {
++    flush_logs();
+     cleanup();
+ }
+diff --git a/assets/logo.png b/assets/logo.png
+index aaa..bbb 100644
+GIT binary patch
+literal 4096
+zcmVbinarydata1
+
+literal 2048
+zcmVbinarydata2
+
+diff --git a/Cargo.lock b/Cargo.lock
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -100,3 +100,3 @@
+ name = \"serde\"
+-version = \"1.0.1\"
++version = \"1.0.2\"
+ source = \"registry\"
+diff --git a/src/old_util.rs b/src/old_util.rs
+deleted file mode 100644
+--- a/src/old_util.rs
++++ /dev/null
+@@ -1,3 +0,0 @@
+-fn old_helper() {
+-    deprecated();
+-}
+diff --git a/src/helper.rs b/src/utils.rs
+similarity index 90%
+rename from src/helper.rs
+rename to src/utils.rs
+--- a/src/helper.rs
++++ b/src/utils.rs
+@@ -5,3 +5,4 @@
+ fn assist() {
++    log_call();
+     do_work();
+ }
+";
+
+#[test]
+fn render_mixed_types_at_top() {
+    let mut app = App::new(parse_diff(MIXED_TYPES_DIFF));
+    insta::assert_snapshot!(render_app(&mut app, 60, 25));
+}
+
+#[test]
+fn render_mixed_types_at_bottom() {
+    let mut app = App::new(parse_diff(MIXED_TYPES_DIFF));
+    // Navigate to last file (renamed), then its hunk
+    app.next_file(); // main.rs
+    app.next_file(); // logo.png (binary)
+    app.next_file(); // Cargo.lock
+    app.next_file(); // old_util.rs (deleted)
+    app.next_file(); // utils.rs (renamed)
+    app.cursor_down(); // last hunk
+    insta::assert_snapshot!(render_app(&mut app, 60, 25));
+}
+
+#[test]
+fn render_mixed_types_at_binary() {
+    let mut app = App::new(parse_diff(MIXED_TYPES_DIFF));
+    app.next_file(); // main.rs
+    app.next_file(); // logo.png (binary, folded by default)
+    insta::assert_snapshot!(render_app(&mut app, 60, 25));
+}
+
+#[test]
+fn render_mixed_types_at_deleted() {
+    let mut app = App::new(parse_diff(MIXED_TYPES_DIFF));
+    app.next_file(); // main.rs
+    app.next_file(); // logo.png
+    app.next_file(); // Cargo.lock
+    app.next_file(); // old_util.rs (deleted, folded by default)
+    insta::assert_snapshot!(render_app(&mut app, 60, 25));
+}
+
 #[test]
 fn down_walks_all_targets() {
     let mut app = App::new(parse_diff(NAV_DIFF));
