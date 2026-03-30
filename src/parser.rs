@@ -1,4 +1,4 @@
-/// Parse unified (git) diff format from a string into a list of file entries.
+//! Parse unified (git) diff format from a string into a list of file entries.
 
 /// Strip ANSI escape sequences from input.
 fn strip_ansi(input: &str) -> String {
@@ -7,16 +7,16 @@ fn strip_ansi(input: &str) -> String {
     while let Some(c) = chars.next() {
         if c == '\x1b' {
             // Skip ESC [ ... (final byte is 0x40-0x7E)
-            if let Some(next) = chars.next() {
-                if next == '[' {
-                    for c2 in chars.by_ref() {
-                        if c2.is_ascii() && (0x40..=0x7E).contains(&(c2 as u8)) {
-                            break;
-                        }
+            if let Some(next) = chars.next()
+                && next == '['
+            {
+                for c2 in chars.by_ref() {
+                    if c2.is_ascii() && (0x40..=0x7E).contains(&(c2 as u8)) {
+                        break;
                     }
                 }
-                // else: skip the single char after ESC
             }
+            // else: skip the single char after ESC
         } else {
             out.push(c);
         }
@@ -50,6 +50,7 @@ pub struct Hunk {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct FileEntry {
     pub rel_path: String,
     pub old_path: Option<String>,
@@ -303,15 +304,15 @@ pub fn parse_diff(input: &str) -> Vec<FileEntry> {
                     let size_str = line
                         .strip_prefix("literal ")
                         .or_else(|| line.strip_prefix("delta "));
-                    if let Some(rest) = size_str {
-                        if let Ok(size) = rest.trim().parse::<usize>() {
-                            if pending.literal_count == 0 {
-                                pending.binary_new_size = Some(size);
-                            } else if pending.literal_count == 1 {
-                                pending.binary_old_size = Some(size);
-                            }
-                            pending.literal_count += 1;
+                    if let Some(rest) = size_str
+                        && let Ok(size) = rest.trim().parse::<usize>()
+                    {
+                        if pending.literal_count == 0 {
+                            pending.binary_new_size = Some(size);
+                        } else if pending.literal_count == 1 {
+                            pending.binary_old_size = Some(size);
                         }
+                        pending.literal_count += 1;
                     }
                 }
             }
@@ -325,6 +326,7 @@ pub fn parse_diff(input: &str) -> Vec<FileEntry> {
 }
 
 /// Format confirmed entries back into a unified diff.
+#[allow(dead_code)]
 pub fn format_confirmed_diff(files: &[FileEntry]) -> String {
     let mut output = String::new();
 

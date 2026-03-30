@@ -337,12 +337,12 @@ impl App {
             Some(VisibleKind::Folder(path)) => {
                 if self.folded.contains(path) {
                     // Already folded — move to parent folder
-                    if let Some(parent) = self.parent_merged_folder(path) {
-                        if let Some(pos) = items.iter().position(|i| {
+                    if let Some(parent) = self.parent_merged_folder(path)
+                        && let Some(pos) = items.iter().position(|i| {
                             matches!(&i.kind, VisibleKind::Folder(p) if *p == parent)
-                        }) {
-                            self.cursor = pos;
-                        }
+                        })
+                    {
+                        self.cursor = pos;
                     }
                 } else {
                     self.folded.insert(path.clone());
@@ -351,12 +351,12 @@ impl App {
             Some(VisibleKind::File(idx)) => {
                 let idx = *idx;
                 // Always move to parent folder — never fold
-                if let Some(parent) = self.parent_folder(idx) {
-                    if let Some(pos) = items.iter().position(|i| {
+                if let Some(parent) = self.parent_folder(idx)
+                    && let Some(pos) = items.iter().position(|i| {
                         matches!(&i.kind, VisibleKind::Folder(p) if *p == parent)
-                    }) {
-                        self.cursor = pos;
-                    }
+                    })
+                {
+                    self.cursor = pos;
                 }
             }
             Some(VisibleKind::HunkHeader(file_idx, _)) => {
@@ -490,6 +490,7 @@ impl App {
 
     // ── File list popup ──
 
+    #[allow(clippy::type_complexity)]
     pub fn filtered_files(&self) -> Vec<(usize, Option<(i64, Vec<usize>)>)> {
         if self.file_list_query.is_empty() {
             return self

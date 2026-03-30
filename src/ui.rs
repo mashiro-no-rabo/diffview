@@ -224,7 +224,7 @@ fn build_segment_tree<'a>(app: &'a App, cursor: usize) -> Vec<Segment<'a>> {
                     let hunk_line = &hunk.lines[*line_idx];
                     let (prefix, text, style, line_num_str) = match hunk_line {
                         HunkLine::Context(s) => {
-                            (" ", s.as_str(), Style::default().fg(Color::DarkGray),
+                            (" ", s.as_str(), Style::default().fg(Color::Cyan),
                              format!("{:>4}", old_line))
                         }
                         HunkLine::Addition(s) => {
@@ -734,10 +734,10 @@ fn find_y_offset(segments: &[Segment], target: &SearchTarget, state: &mut FindSt
                 state.y += 1;
             }
             Segment::Folder { full_path, children, .. } => {
-                if let SearchTarget::Folder(p) = target {
-                    if full_path.as_str() == *p {
-                        return Some(state.y);
-                    }
+                if let SearchTarget::Folder(p) = target
+                    && full_path.as_str() == *p
+                {
+                    return Some(state.y);
                 }
                 state.y += 1; // top border
                 if let Some(r) = find_y_offset(children, target, state) {
@@ -746,10 +746,10 @@ fn find_y_offset(segments: &[Segment], target: &SearchTarget, state: &mut FindSt
                 state.y += 1; // bottom border
             }
             Segment::File { file_idx, children, .. } => {
-                if let SearchTarget::File(idx) = target {
-                    if *file_idx == *idx {
-                        return Some(state.y);
-                    }
+                if let SearchTarget::File(idx) = target
+                    && *file_idx == *idx
+                {
+                    return Some(state.y);
                 }
                 state.y += 1; // top border
                 if let Some(r) = find_y_offset(children, target, state) {
