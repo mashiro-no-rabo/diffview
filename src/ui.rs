@@ -115,6 +115,33 @@ fn build_segment_tree<'a>(app: &'a App, cursor: usize) -> Vec<Segment<'a>> {
                 if current_folder_stack.len() == depth {
                     current_folder_stack.push(path.clone());
                 }
+
+                // If this folder is folded, check whether it has any visible
+                // files underneath.  When it doesn't, the segment tree would
+                // never learn about it (segments are built from FileData
+                // entries).  Insert a dummy FileData so the folder still
+                // renders as a collapsed row.
+                if app.folded.contains(path) {
+                    let has_visible_file = visible[vis_idx + 1..]
+                        .iter()
+                        .take_while(|item| item.depth > depth)
+                        .any(|item| matches!(item.kind, VisibleKind::File(_)));
+                    if !has_visible_file {
+                        // Flush any pending file first
+                        if let Some(fd) = current_file.take() {
+                            file_datas.push(fd);
+                        }
+                        // Push a synthetic leaf so nest_files creates the
+                        // Folder segment.  Use file_idx = usize::MAX as a
+                        // sentinel — render_segments will see an empty
+                        // children list and just draw the folder border.
+                        file_datas.push(FileData {
+                            folder_stack: current_folder_stack.clone(),
+                            file_idx: usize::MAX,
+                            lines: Vec::new(),
+                        });
+                    }
+                }
             }
             VisibleKind::File(file_idx) => {
                 // Flush previous file
@@ -294,13 +321,16 @@ fn build_segment_tree<'a>(app: &'a App, cursor: usize) -> Vec<Segment<'a>> {
                 });
             } else {
                 let fd = &mut files[i];
-                let lines = std::mem::take(&mut fd.lines);
-                let children: Vec<Segment<'b>> =
-                    lines.into_iter().map(Segment::Line).collect();
-                segments.push(Segment::File {
-                    file_idx: fd.file_idx,
-                    children,
-                });
+                // Skip sentinel entries used to materialise folded folders
+                if fd.file_idx != usize::MAX {
+                    let lines = std::mem::take(&mut fd.lines);
+                    let children: Vec<Segment<'b>> =
+                        lines.into_iter().map(Segment::Line).collect();
+                    segments.push(Segment::File {
+                        file_idx: fd.file_idx,
+                        children,
+                    });
+                }
                 i += 1;
             }
         }

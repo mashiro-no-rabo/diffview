@@ -878,6 +878,14 @@ fn render_left_on_file_keeps_content() {
 }
 
 #[test]
+fn render_left_on_folder_folds_children() {
+    let mut app = App::new(parse_diff(NAV_DIFF));
+    // cursor starts on [folder] app — press left to fold it
+    app.fold_current();
+    insta::assert_snapshot!(render_app(&mut app, 60, 20));
+}
+
+#[test]
 fn down_walks_all_targets() {
     let mut app = App::new(parse_diff(NAV_DIFF));
     // down visits folders, files, and hunk headers in order

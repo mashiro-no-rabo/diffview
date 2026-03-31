@@ -1,60 +1,2395 @@
-diff --git a/next/components/shop-floor/orders/auto-schedule-step3-generate.tsx b/next/components/shop-floor/orders/auto-schedule-step3-generate.tsx
-index 2cff4638da..64f474ba4f 100644
---- a/next/components/shop-floor/orders/auto-schedule-step3-generate.tsx
-+++ b/next/components/shop-floor/orders/auto-schedule-step3-generate.tsx
-@@ -90,6 +90,7 @@
-   minimize_tardiness: "shop_floor_scheduler._auto_schedule.objective_minimize_tardiness",
-   minimize_earliness: "shop_floor_scheduler._auto_schedule.objective_minimize_earliness",
-   minimize_changeover_time: "shop_floor_scheduler._auto_schedule.objective_minimize_changeover_time",
-+  minimize_late_orders: "shop_floor_scheduler._auto_schedule.objective_minimize_late_orders",
-   minimize_missed_orders: "shop_floor_scheduler._auto_schedule.objective_minimize_missed_orders",
- };
-
-diff --git a/next/public/locales/de/shop-floor-scheduler.json b/next/public/locales/de/shop-floor-scheduler.json
-index f1918833dc..5746b8b5fb 100644
---- a/next/public/locales/de/shop-floor-scheduler.json
-+++ b/next/public/locales/de/shop-floor-scheduler.json
-@@ -26,6 +26,7 @@
-     "not_placed": "not placed",
-     "objective_minimize_changeover_time": "changeover",
-     "objective_minimize_earliness": "earliness",
-+    "objective_minimize_late_orders": "late orders #",
-     "objective_minimize_missed_orders": "missed orders",
-     "objective_minimize_tardiness": "late orders",
-     "order_selection_count": "{{selected}} / {{total}}",
-diff --git a/next/public/locales/en/shop-floor-scheduler.json b/next/public/locales/en/shop-floor-scheduler.json
-index e56b05cdfc..6a401a49fe 100644
---- a/next/public/locales/en/shop-floor-scheduler.json
-+++ b/next/public/locales/en/shop-floor-scheduler.json
-@@ -26,6 +26,7 @@
-     "not_placed": "not placed",
-     "objective_minimize_changeover_time": "changeover",
-     "objective_minimize_earliness": "earliness",
-+    "objective_minimize_late_orders": "late orders #",
-     "objective_minimize_missed_orders": "missed orders",
-     "objective_minimize_tardiness": "late orders",
-     "order_selection_count": "{{selected}} / {{total}}",
-diff --git a/next/public/locales/es/shop-floor-scheduler.json b/next/public/locales/es/shop-floor-scheduler.json
-index 3cefe4fdc9..ee3ce04549 100644
---- a/next/public/locales/es/shop-floor-scheduler.json
-+++ b/next/public/locales/es/shop-floor-scheduler.json
-@@ -26,6 +26,7 @@
-     "not_placed": "not placed",
-     "objective_minimize_changeover_time": "changeover",
-     "objective_minimize_earliness": "earliness",
-+    "objective_minimize_late_orders": "late orders #",
-     "objective_minimize_missed_orders": "missed orders",
-     "objective_minimize_tardiness": "late orders",
-     "order_selection_count": "{{selected}} / {{total}}",
-diff --git a/next/public/locales/is/shop-floor-scheduler.json b/next/public/locales/is/shop-floor-scheduler.json
-index 381ceb0081..d8924cb2a7 100644
---- a/next/public/locales/is/shop-floor-scheduler.json
-+++ b/next/public/locales/is/shop-floor-scheduler.json
-@@ -26,6 +26,7 @@
-     "not_placed": "not placed",
-     "objective_minimize_changeover_time": "changeover",
-     "objective_minimize_earliness": "earliness",
-+    "objective_minimize_late_orders": "late orders #",
-     "objective_minimize_missed_orders": "missed orders",
-     "objective_minimize_tardiness": "late orders",
-     "order_selection_count": "{{selected}} / {{total}}",
+diff --git a/engine/alembic/versions/2026-03-31_106f505e7374_add_custom_reports_table.py b/engine/alembic/versions/2026-03-31_106f505e7374_add_custom_reports_table.py
+new file mode 100644
+index 0000000000..20f2a2e744
+--- /dev/null
++++ b/engine/alembic/versions/2026-03-31_106f505e7374_add_custom_reports_table.py
+@@ -0,0 +1,36 @@
++"""Add custom_reports table
++
++Revision ID: 106f505e7374
++Revises: b5d4e3f2a1c0
++Create Date: 2026-03-31 10:00:00.000000
++
++"""
++
++import sqlalchemy as sa
++from alembic import op
++
++# revision identifiers, used by Alembic.
++revision = "106f505e7374"
++down_revision = "b5d4e3f2a1c0"
++branch_labels = None
++depends_on = None
++
++
++def upgrade() -> None:
++    op.create_table(
++        "custom_reports",
++        sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
++        sa.Column("report_id", sa.Unicode(256), nullable=False),
++        sa.Column("title", sa.Unicode(512), nullable=False),
++        sa.Column("user_prompt", sa.Unicode(4000), nullable=False),
++        sa.Column("definition", sa.JSON(), nullable=False),
++        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("getdate()"), nullable=False),
++        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("getdate()"), nullable=False),
++        sa.PrimaryKeyConstraint("id", name=op.f("pk_custom_reports")),
++        sa.UniqueConstraint("report_id", name=op.f("uq_custom_reports_report_id")),
++        schema="plaio_dbo",
++    )
++
++
++def downgrade() -> None:
++    op.drop_table("custom_reports", schema="plaio_dbo")
+diff --git a/engine/app/custom_reports/__init__.py b/engine/app/custom_reports/__init__.py
+new file mode 100644
+index 0000000000..e69de29bb2
+diff --git a/engine/app/custom_reports/agent.py b/engine/app/custom_reports/agent.py
+new file mode 100644
+index 0000000000..8abbc4365a
+--- /dev/null
++++ b/engine/app/custom_reports/agent.py
+@@ -0,0 +1,124 @@
++from pydantic_ai import Agent
++from pydantic_ai.models.bedrock import BedrockConverseModel
++from pydantic_ai.providers.bedrock import BedrockProvider
++
++from app.custom_reports.join_knowledge import format_join_knowledge
++from app.custom_reports.schemas import CustomReportDefinition
++from app.frameworks.worksheet import ColumnAggregator
++from app.frameworks.worksheet._runtime.column import generate_columns  # ast-grep-ignore: worksheet-import
++from app.frameworks.worksheet._runtime.registry import WorksheetRegistry  # ast-grep-ignore: worksheet-import
++from app.settings import settings
++
++Agent.instrument_all()
++
++_bedrock_provider = BedrockProvider(
++    region_name=settings.aws_region,
++    aws_access_key_id=settings.integration_s3_access_key.get_secret_value(),
++    aws_secret_access_key=settings.integration_s3_secret_key.get_secret_value(),
++)
++
++
++def build_system_prompt() -> str:
++    import app._worksheets  # noqa: F401 — ensure worksheets are registered
++
++    sections: list[str] = [
++        "You are a custom report builder for a supply chain planning platform.",
++        "You create report definitions that combine data from multiple worksheets.",
++        "",
++        "# Available Worksheets and Their Columns",
++        "",
++    ]
++
++    worksheet_map = WorksheetRegistry._get_worksheet_map()
++    for ws_id, ws_cls in sorted(worksheet_map.items()):
++        if ws_id == "forecast-ytd-ytg":
++            continue
++
++        columns = generate_columns(ws_cls)
++        sections.append(f"## Worksheet: {ws_id} — {ws_cls.title}")
++        sections.append(f"Description: {ws_cls.description}")
++        sections.append("Columns:")
++        for col in columns:
++            extras = []
++            if col.aggregator:
++                extras.append(f"aggregator={col.aggregator}")
++            if col.time_series_format:
++                extras.append(f"time_series_format={col.time_series_format}")
++            extras_str = ", " + ", ".join(extras) if extras else ""
++            sections.append(f"  - {col.id}: {col.title} (data_type={col.data_type}{extras_str})")
++            if col.description:
++                sections.append(f"    Description: {col.description}")
++        sections.append("")
++
++    sections.append(format_join_knowledge())
++    sections.append("")
++    sections.append("# AG Grid Aggregation Options")
++    sections.append("Available aggregators: " + ", ".join(a.value for a in ColumnAggregator))
++    sections.append("")
++    sections.append("# Instructions")
++    sections.append("- Choose a primary_worksheet_id as the main data source (the worksheet whose rows form the base)")
++    sections.append("- Use the exact column IDs and worksheet IDs from the lists above")
++    sections.append("- Set appropriate data_type, aggregator, and width for each column")
++    sections.append("- Mark dimension/grouping columns as default_ui_filterable=True and is_ui_filter_dropdown=True")
++    sections.append("- Use computed expressions for calculated fields (e.g. 'column_a - column_b')")
++    sections.append("")
++    sections.append("# CRITICAL: TimeSeries Columns")
++    sections.append("- Columns listed above with time_series_format (e.g. YEAR_MONTH) are TimeSeries columns")
++    sections.append("- TimeSeries columns contain a dict of {date: value} pairs, expanded into columns per date")
++    sections.append("- When including a TimeSeries source column in your report:")
++    sections.append("  - Keep the SAME data_type as the source (usually INTEGER or DECIMAL)")
++    sections.append("  - MUST set time_series_format to the EXACT same value as the source column")
++    sections.append("  - The frontend expands it into separate date columns automatically")
++    sections.append("- Example: if source has forecast_values (data_type=INTEGER, time_series_format=YEAR_MONTH)")
++    sections.append('  your column MUST have data_type="INTEGER" and time_series_format="YEAR_MONTH"')
++    sections.append("- If time_series_format is null, the column renders as a single value — NOT expanded")
++    sections.append("")
++    sections.append("# CRITICAL: Join Specs")
++    sections.append("- When columns come from MORE THAN ONE worksheet, you MUST add a JoinSpec for each pair")
++    sections.append("- The left_worksheet_id in a JoinSpec should be the primary_worksheet_id")
++    sections.append("- The right_worksheet_id is the secondary worksheet being joined")
++    sections.append("- left_key and right_key must be column IDs that exist on the respective worksheets")
++    sections.append("- Use the Known Join Paths above to determine which keys to join on")
++    sections.append("- If all columns come from a single worksheet, joins can be empty")
++    sections.append("- NEVER reference columns from a worksheet without a join to it")
++
++    return "\n".join(sections)
++
++
++# generation_agent = Agent(
++#     BedrockConverseModel(
++#         model_name="eu.amazon.nova-pro-v1:0",
++#         provider=_bedrock_provider,
++#     ),
++#     output_type=CustomReportDefinition,
++#     retries=3,
++# )
++
++generation_agent = Agent(
++    BedrockConverseModel(
++        model_name="eu.anthropic.claude-haiku-4-5-20251001-v1:0",
++        provider=_bedrock_provider,
++    ),
++    output_type=CustomReportDefinition,
++    retries=3,
++)
++
++
++@generation_agent.system_prompt
++def _generation_system_prompt() -> str:
++    return build_system_prompt()
++
++
++validation_agent = Agent(
++    BedrockConverseModel(
++        model_name="eu.anthropic.claude-3-5-haiku-20241022-v1:0",
++        provider=_bedrock_provider,
++    ),
++    output_type=CustomReportDefinition,
++    system_prompt=(
++        "You are a report definition validator. Given a custom report definition and the user's original prompt, "
++        "verify the definition is correct and complete. Fix any issues with column references, join specs, "
++        "or data types. Return the corrected definition."
++    ),
++    retries=2,
++)
+diff --git a/engine/app/custom_reports/join_knowledge.py b/engine/app/custom_reports/join_knowledge.py
+new file mode 100644
+index 0000000000..aae6192fed
+--- /dev/null
++++ b/engine/app/custom_reports/join_knowledge.py
+@@ -0,0 +1,96 @@
++from pydantic import BaseModel
++
++
++class JoinPath(BaseModel):
++    left_worksheet_id: str
++    right_worksheet_id: str
++    shared_keys: list[str]
++    description: str
++
++
++KNOWN_JOINS: list[JoinPath] = [
++    # Demand-domain joins (shared: item_reference, demand_segment_reference, location_name)
++    JoinPath(
++        left_worksheet_id="actual-sales",
++        right_worksheet_id="demand",
++        shared_keys=["item_reference", "demand_segment_reference", "location_name"],
++        description="Actual sales to demand planning rows",
++    ),
++    JoinPath(
++        left_worksheet_id="actual-sales",
++        right_worksheet_id="forecast-accuracy",
++        shared_keys=["item_reference", "demand_segment_reference", "location_name"],
++        description="Actual sales to forecast accuracy metrics",
++    ),
++    JoinPath(
++        left_worksheet_id="demand",
++        right_worksheet_id="forecast-accuracy",
++        shared_keys=["item_reference", "demand_segment_reference", "location_name"],
++        description="Demand planning to forecast accuracy metrics",
++    ),
++    JoinPath(
++        left_worksheet_id="demand",
++        right_worksheet_id="customer-orders",
++        shared_keys=["item_reference", "demand_segment_reference", "location_name"],
++        description="Demand planning to customer orders",
++    ),
++    JoinPath(
++        left_worksheet_id="actual-sales",
++        right_worksheet_id="customer-orders",
++        shared_keys=["item_reference", "demand_segment_reference", "location_name"],
++        description="Actual sales to customer orders",
++    ),
++    # Supply-domain joins (shared: item_reference, location_name)
++    JoinPath(
++        left_worksheet_id="supply-overview",
++        right_worksheet_id="supply-planning",
++        shared_keys=["item_reference", "location_name"],
++        description="Supply overview to supply planning details",
++    ),
++    JoinPath(
++        left_worksheet_id="supply-overview",
++        right_worksheet_id="supply-orders",
++        shared_keys=["item_reference", "location_name"],
++        description="Supply overview to supply orders",
++    ),
++    JoinPath(
++        left_worksheet_id="supply-planning",
++        right_worksheet_id="supply-orders",
++        shared_keys=["item_reference", "location_name"],
++        description="Supply planning to supply orders",
++    ),
++    # Cross-domain: demand ↔ supply (shared: item_reference, location_name)
++    JoinPath(
++        left_worksheet_id="demand",
++        right_worksheet_id="supply-overview",
++        shared_keys=["item_reference", "location_name"],
++        description="Demand planning to supply overview (cross-domain)",
++    ),
++    JoinPath(
++        left_worksheet_id="actual-sales",
++        right_worksheet_id="supply-overview",
++        shared_keys=["item_reference", "location_name"],
++        description="Actual sales to supply overview (cross-domain)",
++    ),
++    # Production links
++    JoinPath(
++        left_worksheet_id="production",
++        right_worksheet_id="demand",
++        shared_keys=["item_reference"],
++        description="Production to demand planning via item",
++    ),
++    JoinPath(
++        left_worksheet_id="production",
++        right_worksheet_id="supply-overview",
++        shared_keys=["item_reference"],
++        description="Production to supply overview via item",
++    ),
++]
++
++
++def format_join_knowledge() -> str:
++    lines = ["## Known Join Paths Between Worksheets", ""]
++    for jp in KNOWN_JOINS:
++        keys = ", ".join(jp.shared_keys)
++        lines.append(f"- {jp.left_worksheet_id} ↔ {jp.right_worksheet_id}: join on [{keys}] — {jp.description}")
++    return "\n".join(lines)
+diff --git a/engine/app/custom_reports/models.py b/engine/app/custom_reports/models.py
+new file mode 100644
+index 0000000000..3891d17c18
+--- /dev/null
++++ b/engine/app/custom_reports/models.py
+@@ -0,0 +1,17 @@
++from sqlalchemy import Unicode
++from sqlalchemy.orm import Mapped, mapped_column
++
++from app.core.base_db import BaseDB, DateAtMixin
++from app.core.extensions.sqlalchemy_ext import SATypePydantic
++from app.custom_reports.schemas import CustomReportDefinition
++
++
++class CustomReportDB(BaseDB, DateAtMixin, kw_only=True):
++    __tablename__ = "custom_reports"
++    __table_args__ = {"schema": "plaio_dbo"}
++
++    id: Mapped[int] = mapped_column(init=False, primary_key=True)
++    report_id: Mapped[str] = mapped_column(Unicode(256), unique=True)
++    title: Mapped[str] = mapped_column(Unicode(512))
++    user_prompt: Mapped[str] = mapped_column(Unicode(4000))
++    definition: Mapped[CustomReportDefinition] = mapped_column(SATypePydantic(CustomReportDefinition))
+diff --git a/engine/app/custom_reports/router.py b/engine/app/custom_reports/router.py
+new file mode 100644
+index 0000000000..232cb77839
+--- /dev/null
++++ b/engine/app/custom_reports/router.py
+@@ -0,0 +1,62 @@
++from fastapi import APIRouter
++from pydantic import BaseModel
++
++from app.core.deps import AsyncCustomerDbDep, CustomAttributesDep, UserDep
++from app.custom_reports import service
++from app.custom_reports.schemas import CustomReportDefinition
++
++router = APIRouter(tags=["Custom Reports"])
++
++
++class GenerateReportRequest(BaseModel):
++    prompt: str
++
++
++class CreateReportRequest(BaseModel):
++    report_id: str
++    title: str
++    user_prompt: str
++    definition: CustomReportDefinition
++
++
++class UpdateReportRequest(BaseModel):
++    prompt: str
++    current_definition: CustomReportDefinition
++
++
++@router.post("/generate")
++async def generate_report(body: GenerateReportRequest, user: UserDep, _: CustomAttributesDep) -> CustomReportDefinition:
++    return await service.generate_report(body.prompt)
++
++
++@router.post("/")
++async def create_report(body: CreateReportRequest, db_session: AsyncCustomerDbDep, user: UserDep, _: CustomAttributesDep):
++    return await service.create_report(
++        db_session,
++        report_id=body.report_id,
++        title=body.title,
++        user_prompt=body.user_prompt,
++        definition=body.definition,
++    )
++
++
++@router.get("/")
++async def list_reports(db_session: AsyncCustomerDbDep, user: UserDep, _: CustomAttributesDep):
++    return await service.list_reports(db_session)
++
++
++@router.get("/{report_id}")
++async def get_report(report_id: str, db_session: AsyncCustomerDbDep, user: UserDep, _: CustomAttributesDep):
++    return await service.get_report(db_session, report_id)
++
++
++@router.post("/{report_id}/update")
++async def update_report_with_llm(
++    report_id: str, body: UpdateReportRequest, db_session: AsyncCustomerDbDep, user: UserDep, _: CustomAttributesDep
++) -> CustomReportDefinition:
++    return await service.update_report(db_session, report_id, body.prompt, body.current_definition)
++
++
++@router.delete("/{report_id}", status_code=204)
++async def delete_report(report_id: str, db_session: AsyncCustomerDbDep, user: UserDep, _: CustomAttributesDep) -> None:
++    await service.delete_report(db_session, report_id)
+diff --git a/engine/app/custom_reports/schemas.py b/engine/app/custom_reports/schemas.py
+new file mode 100644
+index 0000000000..3287d83ea0
+--- /dev/null
++++ b/engine/app/custom_reports/schemas.py
+@@ -0,0 +1,49 @@
++from __future__ import annotations
++
++from typing import Literal
++
++from pydantic import BaseModel
++
++from app.frameworks.data import DataType, TimeSeriesFormat
++from app.frameworks.worksheet import ColumnAggregator, ColumnWidth
++
++
++class ColumnSource(BaseModel):
++    worksheet_id: str
++    column_id: str
++
++
++class ComputedExpression(BaseModel):
++    expression: str
++
++
++class ReportColumnDefinition(BaseModel):
++    id: str
++    title: str
++    description: str = ""
++    source: ColumnSource | None = None
++    computed: ComputedExpression | None = None
++    data_type: DataType
++    aggregator: ColumnAggregator | None = None
++    width: ColumnWidth = ColumnWidth.MEDIUM
++    postfix: str | None = None
++    default_visible: bool = True
++    default_ui_filterable: bool = False
++    is_ui_filter_dropdown: bool = False
++    time_series_format: TimeSeriesFormat | None = None
++
++
++class JoinSpec(BaseModel):
++    left_worksheet_id: str
++    right_worksheet_id: str
++    left_key: str | list[str]
++    right_key: str | list[str]
++    join_type: Literal["inner", "left"] = "left"
++
++
++class CustomReportDefinition(BaseModel):
++    description: str
++    primary_worksheet_id: str
++    columns: list[ReportColumnDefinition]
++    joins: list[JoinSpec]
++    default_grouping: list[str] = []
+diff --git a/engine/app/custom_reports/service.py b/engine/app/custom_reports/service.py
+new file mode 100644
+index 0000000000..1c414ae90f
+--- /dev/null
++++ b/engine/app/custom_reports/service.py
+@@ -0,0 +1,73 @@
++from sqlalchemy import delete, select
++from sqlalchemy.ext.asyncio import AsyncSession
++
++from app.custom_reports.agent import generation_agent
++from app.custom_reports.models import CustomReportDB
++from app.custom_reports.schemas import CustomReportDefinition
++from app.helpers.query import query_into_list, query_one_or_404
++
++
++async def generate_report(prompt: str) -> CustomReportDefinition:
++    result = await generation_agent.run(prompt)
++    return result.output
++
++
++async def update_report(
++    db_session: AsyncSession,
++    report_id: str,
++    prompt: str,
++    current_definition: CustomReportDefinition,
++) -> CustomReportDefinition:
++    update_prompt = (
++        f"Current report definition:\n{current_definition.model_dump_json(indent=2)}\n\n"
++        f"User request: {prompt}\n\n"
++        "Update the report definition based on the user's request. "
++        "Keep existing columns/joins unless the user asks to change them."
++    )
++    result = await generation_agent.run(update_prompt)
++    new_definition = result.output
++
++    # Persist the updated definition
++    report = await query_one_or_404(
++        db_session,
++        select(CustomReportDB).where(CustomReportDB.report_id == report_id),
++        msg=f"Report '{report_id}' not found",
++    )
++    report.definition = new_definition
++    await db_session.commit()
++
++    return new_definition
++
++
++async def create_report(
++    db_session: AsyncSession,
++    report_id: str,
++    title: str,
++    user_prompt: str,
++    definition: CustomReportDefinition,
++) -> CustomReportDB:
++    report = CustomReportDB(
++        report_id=report_id,
++        title=title,
++        user_prompt=user_prompt,
++        definition=definition,
++    )
++    await report.persist_and_commit(db_session)
++    return report
++
++
++async def list_reports(db_session: AsyncSession) -> list[CustomReportDB]:
++    return await query_into_list(db_session, select(CustomReportDB).order_by(CustomReportDB.created_at.desc()))
++
++
++async def get_report(db_session: AsyncSession, report_id: str) -> CustomReportDB:
++    return await query_one_or_404(
++        db_session,
++        select(CustomReportDB).where(CustomReportDB.report_id == report_id),
++        msg=f"Report '{report_id}' not found",
++    )
++
++
++async def delete_report(db_session: AsyncSession, report_id: str) -> None:
++    await db_session.execute(delete(CustomReportDB).where(CustomReportDB.report_id == report_id))
++    await db_session.commit()
+diff --git a/engine/app/menu/service.py b/engine/app/menu/service.py
+index 08972b6c97..83499568f3 100644
+--- a/engine/app/menu/service.py
++++ b/engine/app/menu/service.py
+@@ -2,6 +2,7 @@
+ from sqlalchemy.ext.asyncio import AsyncSession
+ 
+ from app.core.models import PlaioModule
++from app.custom_reports.models import CustomReportDB
+ from app.customer.models import CustomerModulesDB
+ from app.customer.worksheets import CustomAttributesWorksheet, CustomerModulesWorksheet, GlobalSettingsWorksheet
+ from app.demand.worksheets import (
+@@ -135,20 +136,30 @@
+                     )
+                 )
+ 
+-    # TODO: Think what to do with Custom Reports in the menu
+-    # if PlaioModule.REPORTS in modules and (user.is_admin or f"module:{PlaioModule.REPORTS}" in accessible_menu_items):
+-    #     all_menu_items.extend(
+-    #         [
+-    #             MainMenuItemResponse(
+-    #                 id=150,
+-    #                 title="Reports",
+-    #                 icon=MenuIconEnum.REPORTS,
+-    #                 items=[
+-    #                     MainMenuItemResponse(id=160, title="Forecast YTD/YTG", url="/worksheet/forecast-ytd-ytg"),
+-    #                 ],
+-    #             )
+-    #         ]
+-    #     )
++    custom_reports = (await db_session.scalars(select(CustomReportDB).order_by(CustomReportDB.title))).all()
++    report_items = [
++        MainMenuItemResponse(
++            id=next(id_gen),
++            title="New Report",
++            url="/custom-reports/new",
++        ),
++        *(
++            MainMenuItemResponse(
++                id=next(id_gen),
++                title=report.title,
++                url=f"/custom-report/{report.report_id}",
++            )
++            for report in custom_reports
++        ),
++    ]
++    all_menu_items.append(
++        MainMenuItemResponse(
++            id=next(id_gen),
++            title="Reports",
++            icon=MenuIconEnum.REPORTS,
++            items=report_items,
++        )
++    )
+ 
+     if user.is_admin:
+         all_menu_items.append(
+diff --git a/engine/app/router.py b/engine/app/router.py
+index 5574b74987..bb93cef355 100644
+--- a/engine/app/router.py
++++ b/engine/app/router.py
+@@ -123,5 +123,9 @@
+ v2_router.include_router(prefix="/supply/virtual-bulks", router=virtual_bulks_router)
+ v2_router.include_router(prefix="/supply/campaign-order-groups", router=batch_allocations_router)
+ 
++from app.custom_reports.router import router as custom_reports_router  # noqa: E402
++
++v2_router.include_router(prefix="/custom-reports", router=custom_reports_router)
++
+ v2_router.include_router(prefix="/upload", router=upload_router)
+ v2_router.include_router(prefix="/roles", router=role_router, dependencies=[Depends(verify_admin)])
+diff --git a/engine/tests/integration/custom_reports/__init__.py b/engine/tests/integration/custom_reports/__init__.py
+new file mode 100644
+index 0000000000..e69de29bb2
+diff --git a/engine/tests/integration/custom_reports/test_generate.py b/engine/tests/integration/custom_reports/test_generate.py
+new file mode 100644
+index 0000000000..c8f32fc114
+--- /dev/null
++++ b/engine/tests/integration/custom_reports/test_generate.py
+@@ -0,0 +1,131 @@
++from __future__ import annotations
++
++import pytest
++
++from app.custom_reports.agent import build_system_prompt, generation_agent
++from app.custom_reports.schemas import CustomReportDefinition
++from app.frameworks.worksheet._runtime.column import generate_columns  # ast-grep-ignore: worksheet-import
++from app.frameworks.worksheet._runtime.registry import WorksheetRegistry  # ast-grep-ignore: worksheet-import
++
++FORECAST_YTD_YTG_PROMPT = (
++    "Create a 12-month rolling forecast report for the current calendar year. "
++    "Show item reference, item name, demand segment reference, and location as identity columns. "
++    "Include a monthly rolling forecast time series. "
++    "Add budget total, variance vs budget, and percentage vs budget columns. "
++    "Add last year total sales, variance vs last year, and percentage vs last year columns. "
++    "Include YTD (year-to-date) and YTG (year-to-go) columns. "
++    "Add average columns: YTD average, budget average, rolling forecast current month average, and last year average. "
++    "Use the demand and actual-sales worksheets as sources."
++)
++
++EXPECTED_IDENTITY_COLUMNS = {"item_reference", "item_name", "demand_segment_reference", "location_name"}
++
++EXPECTED_METRIC_COLUMNS = {
++    "budget_total",
++    "vs_budget",
++    "percentage_budget",
++    "ly_total_sales",
++    "ly_vs_sales",
++    "ly_percentage_sales",
++    "ytd",
++    "ytg",
++}
++
++
++@pytest.mark.skip(reason="Requires AWS Bedrock credentials")
++async def test_generate_forecast_ytd_ytg_definition():
++    result = await generation_agent.run(FORECAST_YTD_YTG_PROMPT)
++    definition: CustomReportDefinition = result.output
++
++    assert definition.title, "Definition should have a title"
++    assert definition.description, "Definition should have a description"
++    assert definition.primary_worksheet_id in ("actual-sales", "demand"), (
++        f"Primary worksheet should be actual-sales or demand, got {definition.primary_worksheet_id}"
++    )
++
++    column_ids = {col.id for col in definition.columns}
++
++    # Check identity columns
++    missing_identity = EXPECTED_IDENTITY_COLUMNS - column_ids
++    assert not missing_identity, f"Missing identity columns: {missing_identity}"
++
++    # Check that at least some metric columns are present
++    found_metrics = EXPECTED_METRIC_COLUMNS & column_ids
++    assert len(found_metrics) >= 4, (
++        f"Expected at least 4 metric columns, found {len(found_metrics)}: {found_metrics}"
++    )
++
++    # Check that we have at least one time series column
++    ts_columns = [col for col in definition.columns if col.time_series_format is not None]
++    assert len(ts_columns) >= 1, "Expected at least one time series column for rolling forecast"
++
++    # All source columns must reference valid worksheets
++    import app._worksheets  # noqa: F401
++
++    worksheet_map = WorksheetRegistry._get_worksheet_map()
++    for col in definition.columns:
++        if col.source:
++            assert col.source.worksheet_id in worksheet_map, (
++                f"Column {col.id} references unknown worksheet {col.source.worksheet_id}"
++            )
++
++    # Check joins exist if multiple worksheets are used
++    source_worksheets = {col.source.worksheet_id for col in definition.columns if col.source}
++    if len(source_worksheets) > 1:
++        assert len(definition.joins) >= 1, "Multiple source worksheets require at least one join"
++
++    print("\n--- Generated Definition ---")
++    print(f"Title: {definition.title}")
++    print(f"Primary: {definition.primary_worksheet_id}")
++    print(f"Columns ({len(definition.columns)}):")
++    for col in definition.columns:
++        src = f"  source={col.source.worksheet_id}.{col.source.column_id}" if col.source else ""
++        comp = f"  computed={col.computed.expression}" if col.computed else ""
++        print(f"  - {col.id}: {col.title} ({col.data_type}){src}{comp}")
++    print(f"Joins ({len(definition.joins)}):")
++    for join in definition.joins:
++        print(f"  - {join.left_worksheet_id} ↔ {join.right_worksheet_id} on {join.left_key}")
++
++
++@pytest.mark.skip(reason="Requires AWS Bedrock credentials")
++async def test_compare_with_static_worksheet():
++    import app._worksheets  # noqa: F401
++
++    # Get static forecast-ytd-ytg columns
++    static_ws = WorksheetRegistry.get_worksheet_by_id("forecast-ytd-ytg")
++    static_columns = generate_columns(static_ws)
++    static_col_ids = {col.id for col in static_columns}
++
++    # Generate definition
++    result = await generation_agent.run(FORECAST_YTD_YTG_PROMPT)
++    definition: CustomReportDefinition = result.output
++    generated_col_ids = {col.id for col in definition.columns}
++
++    # Report comparison
++    matched = static_col_ids & generated_col_ids
++    missing_from_generated = static_col_ids - generated_col_ids
++    extra_in_generated = generated_col_ids - static_col_ids
++
++    print("\n--- Column Comparison ---")
++    print(f"Static columns: {len(static_col_ids)}")
++    print(f"Generated columns: {len(generated_col_ids)}")
++    print(f"Matched: {len(matched)} — {sorted(matched)}")
++    print(f"Missing from generated: {sorted(missing_from_generated)}")
++    print(f"Extra in generated: {sorted(extra_in_generated)}")
++
++    # We expect at least 50% column match
++    match_ratio = len(matched) / len(static_col_ids) if static_col_ids else 0
++    assert match_ratio >= 0.5, (
++        f"Expected at least 50% column match, got {match_ratio:.0%}. "
++        f"Missing: {sorted(missing_from_generated)}"
++    )
++
++
++@pytest.mark.skip(reason="Requires AWS Bedrock credentials")
++async def test_system_prompt_is_valid():
++    prompt = build_system_prompt()
++    assert "Available Worksheets" in prompt
++    assert "Known Join Paths" in prompt
++    assert "forecast-ytd-ytg" not in prompt, "forecast-ytd-ytg should be excluded from available worksheets"
++    assert "actual-sales" in prompt
++    assert "demand" in prompt
+diff --git a/next/components/custom-reports/report-builder.tsx b/next/components/custom-reports/report-builder.tsx
+new file mode 100644
+index 0000000000..a3f128b2da
+--- /dev/null
++++ b/next/components/custom-reports/report-builder.tsx
+@@ -0,0 +1,349 @@
++import { AutoAwesomeOutlined, SaveOutlined, SendOutlined } from "@mui/icons-material";
++import {
++  Button,
++  Dialog,
++  DialogActions,
++  DialogContent,
++  DialogTitle,
++  IconButton,
++  TextField,
++  Tooltip,
++} from "@mui/material";
++import i18next from "i18next";
++import { useRouter } from "next/router";
++import { type JSX, useCallback, useEffect, useMemo, useRef, useState } from "react";
++import { useTranslation } from "react-i18next";
++
++import { LoaderCircle, PageHeader } from "@plaio/components/ui";
++import { post, useLayoutStore, useOrgMembershipByPathParam } from "@plaio/data-access";
++
++import { assembleCustomReport } from "../../lib/custom-reports/assemble";
++import { buildColumnDefs } from "../../lib/custom-reports/columns";
++import { CustomReportDefinition } from "../../lib/custom-reports/types";
++import { ReportGrid } from "./report-grid";
++
++interface ChatMessage {
++  role: "user" | "assistant";
++  content: string;
++  definition?: CustomReportDefinition;
++}
++
++export function ReportBuilder(): JSX.Element {
++  const { t } = useTranslation();
++  const router = useRouter();
++  const orgMembership = useOrgMembershipByPathParam();
++  const raiseError = useLayoutStore((state) => state.raiseError);
++  const setMainMenu = useLayoutStore((state) => state.setMainMenu);
++
++  const [messages, setMessages] = useState<ChatMessage[]>([]);
++  const [input, setInput] = useState("");
++  const [isGenerating, setIsGenerating] = useState(false);
++  const [isSaving, setIsSaving] = useState(false);
++  const [definition, setDefinition] = useState<CustomReportDefinition | null>(null);
++  const [showSaveDialog, setShowSaveDialog] = useState(false);
++  const [reportId, setReportId] = useState("");
++  const [reportTitle, setReportTitle] = useState("");
++  const [idManuallyEdited, setIdManuallyEdited] = useState(false);
++
++  // Live data
++  const [worksheetData, setWorksheetData] = useState<Record<string, any[]>>({});
++  const [isLoadingData, setIsLoadingData] = useState(false);
++
++  const chatEndRef = useRef<HTMLDivElement>(null);
++  const inputRef = useRef<HTMLInputElement>(null);
++
++  // Auto-populate from worksheet query param
++  const worksheetId = (Array.isArray(router.query.worksheetId)
++    ? router.query.worksheetId[0]
++    : router.query.worksheetId) ?? null;
++
++  useEffect(() => {
++    if (worksheetId && messages.length === 0) {
++      const initialPrompt = `Create a custom report based on the "${worksheetId}" worksheet. Include all its columns.`;
++      handleSend(initialPrompt);
++    }
++  }, [worksheetId]); // eslint-disable-line react-hooks/exhaustive-deps
++
++  // Scroll to bottom on new messages
++  useEffect(() => {
++    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
++  }, [messages]);
++
++  // Fetch live data when definition changes
++  useEffect(() => {
++    if (definition) {
++      fetchLiveData(definition);
++    }
++  }, [definition]); // eslint-disable-line react-hooks/exhaustive-deps
++
++  const fetchLiveData = useCallback(
++    async (def: CustomReportDefinition) => {
++      const worksheetIds = new Set<string>();
++      worksheetIds.add(def.primary_worksheet_id);
++      for (const join of def.joins) {
++        worksheetIds.add(join.right_worksheet_id);
++      }
++
++      setIsLoadingData(true);
++      try {
++        const entries = await Promise.all(
++          [...worksheetIds].map(async (wsId) => {
++            const result = await post(`/v2/worksheets/${wsId}/query`, { selectors: {} }, orgMembership);
++            const rows = (Array.isArray(result) ? result : []).map((row: any) => row.data ?? row);
++            return [wsId, rows] as const;
++          }),
++        );
++        setWorksheetData(Object.fromEntries(entries));
++      } catch {
++        // Silently fail for live preview — data may not be available for all worksheets
++        setWorksheetData({});
++      } finally {
++        setIsLoadingData(false);
++      }
++    },
++    [orgMembership],
++  );
++
++  const handleSend = useCallback(
++    async (messageText?: string) => {
++      const text = messageText ?? input.trim();
++      if (!text) return;
++
++      const userMessage: ChatMessage = { role: "user", content: text };
++      setMessages((prev) => [...prev, userMessage]);
++      if (!messageText) setInput("");
++
++      setIsGenerating(true);
++      try {
++        // Build full conversation context for the LLM
++        const fullPrompt = [...messages, userMessage]
++          .filter((m) => m.role === "user")
++          .map((m) => m.content)
++          .join("\n\nUser refinement: ");
++
++        const result = await post("/v2/custom-reports/generate", { prompt: fullPrompt }, orgMembership);
++        const newDefinition = result as CustomReportDefinition;
++
++        setDefinition(newDefinition);
++        setMessages((prev) => [
++          ...prev,
++          {
++            role: "assistant",
++            content: `Generated report with ${newDefinition.columns.length} columns from ${new Set(newDefinition.columns.filter((c) => c.source).map((c) => c.source!.worksheet_id)).size} worksheet(s).`,
++            definition: newDefinition,
++          },
++        ]);
++      } catch (error: any) {
++        raiseError({
++          honeycombTraceparent: error.honeycombTraceparent,
++          message: error.message ?? i18next.format(t("common.something_went_wrong"), "capitalize"),
++          showInDialog: true,
++          status: error.status,
++          title: error.title ?? i18next.format(t("common.something_went_wrong"), "capitalize"),
++        });
++        setMessages((prev) => [
++          ...prev,
++          { role: "assistant", content: error.message ?? "Something went wrong. Please try again." },
++        ]);
++      } finally {
++        setIsGenerating(false);
++        inputRef.current?.focus();
++      }
++    },
++    [input, messages, orgMembership, raiseError, t],
++  );
++
++  const handleSave = useCallback(async () => {
++    if (!definition || !reportId.trim() || !reportTitle.trim()) return;
++    setIsSaving(true);
++    setShowSaveDialog(false);
++    try {
++      await post(
++        "/v2/custom-reports",
++        { report_id: reportId.trim(), title: reportTitle.trim(), user_prompt: messages.filter((m) => m.role === "user").map((m) => m.content).join("\n"), definition },
++        orgMembership,
++      );
++      setMainMenu(null); // Force menu refetch to show new report
++      const org = router.query.org;
++      await router.push(`/${org}/custom-report/${reportId.trim()}`);
++    } catch (error: any) {
++      raiseError({
++        honeycombTraceparent: error.honeycombTraceparent,
++        message: error.message ?? i18next.format(t("common.something_went_wrong"), "capitalize"),
++        showInDialog: true,
++        status: error.status,
++        title: error.title ?? i18next.format(t("common.something_went_wrong"), "capitalize"),
++      });
++    } finally {
++      setIsSaving(false);
++    }
++  }, [definition, reportId, reportTitle, messages, orgMembership, raiseError, router, t]);
++
++  const assembledRows = useMemo(() => {
++    if (!definition || Object.keys(worksheetData).length === 0) return [];
++    try {
++      return assembleCustomReport(definition, worksheetData);
++    } catch {
++      return [];
++    }
++  }, [definition, worksheetData]);
++
++  const columnDefs = useMemo(() => {
++    if (!definition) return [];
++    return buildColumnDefs(definition.columns, assembledRows, definition.default_grouping);
++  }, [definition, assembledRows]);
++
++  const handleKeyDown = useCallback(
++    (e: React.KeyboardEvent) => {
++      if (e.key === "Enter" && !e.shiftKey) {
++        e.preventDefault();
++        handleSend();
++      }
++    },
++    [handleSend],
++  );
++
++  return (
++    <div className="flex h-full">
++      {/* Left panel: Chat */}
++      <div className="flex w-[400px] min-w-[350px] flex-col border-r border-gray-200 dark:border-gray-700">
++        <div className="flex items-center justify-between border-b border-gray-200 p-3 dark:border-gray-700">
++          <span className="text-sm font-semibold">
++            {i18next.format(t("common._custom_report.new_custom_report"), "capitalize")}
++          </span>
++          {definition && (
++            <Tooltip title={i18next.format(t("common._custom_report.save_report"), "capitalize")}>
++              <IconButton
++                disabled={isSaving}
++                onClick={() => {
++                  setReportTitle("");
++                  setReportId("");
++                  setIdManuallyEdited(false);
++                  setShowSaveDialog(true);
++                }}
++                size="small"
++              >
++                {isSaving ? <LoaderCircle height={18} width={18} /> : <SaveOutlined fontSize="small" />}
++              </IconButton>
++            </Tooltip>
++          )}
++        </div>
++
++        {/* Messages */}
++        <div className="flex-1 overflow-y-auto p-3">
++          <div className="flex flex-col gap-3">
++            {messages.map((msg, i) => (
++              <div
++                key={i}
++                className={`rounded-lg px-3 py-2 text-sm ${
++                  msg.role === "user"
++                    ? "ml-8 self-end bg-blue-100 dark:bg-blue-900"
++                    : "mr-8 self-start bg-gray-100 dark:bg-gray-800"
++                }`}
++              >
++                {msg.content}
++                {msg.definition && (
++                  <div className="mt-1 text-xs text-gray-500">
++                    {msg.definition.columns.map((c) => c.title).join(" · ")}
++                  </div>
++                )}
++              </div>
++            ))}
++            {isGenerating && (
++              <div className="mr-8 flex items-center gap-2 self-start rounded-lg bg-gray-100 px-3 py-2 text-sm dark:bg-gray-800">
++                <LoaderCircle height={14} width={14} />
++                {i18next.format(t("common._custom_report.generating"), "capitalize")}
++              </div>
++            )}
++            <div ref={chatEndRef} />
++          </div>
++        </div>
++
++        {/* Input */}
++        <div className="border-t border-gray-200 p-3 dark:border-gray-700">
++          <div className="flex items-end gap-2">
++            <TextField
++              disabled={isGenerating}
++              fullWidth
++              inputRef={inputRef}
++              multiline
++              maxRows={4}
++              onChange={(e) => setInput(e.target.value)}
++              onKeyDown={handleKeyDown}
++              placeholder={
++                messages.length === 0
++                  ? t("common._custom_report.placeholder_initial")
++                  : t("common._custom_report.placeholder_refine")
++              }
++              size="small"
++              value={input}
++            />
++            <IconButton
++              color="primary"
++              disabled={!input.trim() || isGenerating}
++              onClick={() => handleSend()}
++              size="small"
++            >
++              {isGenerating ? <LoaderCircle height={20} width={20} /> : <SendOutlined />}
++            </IconButton>
++          </div>
++        </div>
++      </div>
++
++      {/* Right panel: Live report preview */}
++      <div className="flex flex-1 flex-col">
++        {definition ? (
++          <ReportGrid
++            columnDefs={columnDefs}
++            description={definition.description}
++            isLoading={isLoadingData}
++            rowData={assembledRows}
++            title={i18next.format(t("common._custom_report.preview"), "capitalize")}
++          />
++        ) : (
++          <div className="flex h-full items-center justify-center text-gray-400">
++            <div className="flex flex-col items-center gap-2">
++              <AutoAwesomeOutlined className="text-4xl" />
++              <span className="text-sm">{i18next.format(t("common._custom_report.describe_your_report"), "capitalize")}</span>
++            </div>
++          </div>
++        )}
++      </div>
++
++      {/* Save dialog */}
++      <Dialog open={showSaveDialog} onClose={() => setShowSaveDialog(false)}>
++        <DialogTitle>{i18next.format(t("common._custom_report.save_report"), "capitalize")}</DialogTitle>
++        <DialogContent className="flex flex-col gap-3 pt-2">
++          <TextField
++            autoFocus
++            fullWidth
++            label={i18next.format(t("common._custom_report.report_title"), "capitalize")}
++            onChange={(e) => {
++              setReportTitle(e.target.value);
++              if (!idManuallyEdited) {
++                setReportId(e.target.value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, ""));
++              }
++            }}
++            value={reportTitle}
++          />
++          <TextField
++            fullWidth
++            helperText={t("common._custom_report.report_id_helper")}
++            label={i18next.format(t("common._custom_report.report_id"), "capitalize")}
++            onChange={(e) => {
++              setReportId(e.target.value);
++              setIdManuallyEdited(true);
++            }}
++            value={reportId}
++          />
++        </DialogContent>
++        <DialogActions>
++          <Button onClick={() => setShowSaveDialog(false)}>{i18next.format(t("common.cancel"), "capitalize")}</Button>
++          <Button disabled={!reportId.trim() || !reportTitle.trim()} onClick={handleSave} variant="contained">
++            {i18next.format(t("common.save"), "capitalize")}
++          </Button>
++        </DialogActions>
++      </Dialog>
++    </div>
++  );
++}
+diff --git a/next/components/custom-reports/report-grid.tsx b/next/components/custom-reports/report-grid.tsx
+new file mode 100644
+index 0000000000..b86c468ca7
+--- /dev/null
++++ b/next/components/custom-reports/report-grid.tsx
+@@ -0,0 +1,108 @@
++import { FileDownloadOutlined } from "@mui/icons-material";
++import { IconButton, Tooltip } from "@mui/material";
++import {
++  ColDef,
++  CsvExportModule,
++  GridReadyEvent,
++  ModuleRegistry,
++  TooltipModule,
++  ValidationModule,
++} from "ag-grid-community";
++import {
++  ColumnMenuModule,
++  ColumnsToolPanelModule,
++  ContextMenuModule,
++  ExcelExportModule,
++  RowGroupingModule,
++} from "ag-grid-enterprise";
++import { AgGridReact } from "ag-grid-react";
++import i18next from "i18next";
++import { type JSX, useCallback, useMemo, useRef } from "react";
++import { useTranslation } from "react-i18next";
++
++import { PageHeader } from "@plaio/components/ui";
++import { useLayoutStore } from "@plaio/data-access";
++import { getPlaioGridTheme } from "@plaio/util";
++
++ModuleRegistry.registerModules([
++  ColumnMenuModule,
++  ColumnsToolPanelModule,
++  ContextMenuModule,
++  CsvExportModule,
++  ExcelExportModule,
++  RowGroupingModule,
++  TooltipModule,
++  ValidationModule,
++]);
++
++export interface ReportGridProps {
++  columnDefs: ColDef[];
++  rowData: Record<string, any>[];
++  title: string;
++  description?: string;
++  isLoading?: boolean;
++}
++
++export function ReportGrid(props: Readonly<ReportGridProps>): JSX.Element {
++  const { t } = useTranslation();
++  const gridRef = useRef<AgGridReact>(null);
++  const theme = useLayoutStore((state) => state.layout.theme);
++
++  const plaioGridTheme = useMemo(() => {
++    return getPlaioGridTheme(theme);
++  }, [theme]);
++
++  const defaultColDef = useMemo<ColDef>(
++    () => ({
++      editable: false,
++      filter: true,
++      resizable: true,
++      sortable: true,
++    }),
++    [],
++  );
++
++  const onGridReady = useCallback((_event: GridReadyEvent) => {
++    gridRef.current?.api?.sizeColumnsToFit();
++  }, []);
++
++  const exportToExcel = useCallback(() => {
++    gridRef.current?.api?.exportDataAsExcel({
++      fileName: props.title,
++    });
++  }, [props.title]);
++
++  return (
++    <div className="flex h-full flex-col">
++      <PageHeader
++        title={props.title}
++        description={props.description}
++        showLoader={props.isLoading}
++        counter={props.rowData.length > 0 ? String(props.rowData.length) : undefined}
++      >
++        <Tooltip title={i18next.format(t("common._custom_report.export_to_excel"), "capitalize")}>
++          <IconButton size="small" onClick={exportToExcel}>
++            <FileDownloadOutlined fontSize="small" />
++          </IconButton>
++        </Tooltip>
++      </PageHeader>
++      <div className="flex-1">
++        <AgGridReact
++          ref={gridRef}
++          autoGroupColumnDef={{ minWidth: 200 }}
++          columnDefs={props.columnDefs}
++          defaultColDef={defaultColDef}
++          getRowId={(params) => params.data.id}
++          grandTotalRow="bottom"
++          groupDefaultExpanded={-1}
++          onGridReady={onGridReady}
++          overlayNoRowsTemplate={i18next.format(t("common.no_items_found"), "capitalize")}
++          rowData={props.rowData}
++          suppressAggFuncInHeader={true}
++          theme={plaioGridTheme}
++          tooltipShowDelay={1000}
++        />
++      </div>
++    </div>
++  );
++}
+diff --git a/next/components/custom-reports/report-page.tsx b/next/components/custom-reports/report-page.tsx
+new file mode 100644
+index 0000000000..1f94583464
+--- /dev/null
++++ b/next/components/custom-reports/report-page.tsx
+@@ -0,0 +1,389 @@
++import {
++  AutoAwesomeOutlined,
++  CheckCircleOutlineOutlined,
++  FileDownloadOutlined,
++  MenuOutlined,
++  RefreshOutlined,
++} from "@mui/icons-material";
++import { Box, Tab, Tabs, TextField } from "@mui/material";
++import {
++  ColDef,
++  CsvExportModule,
++  GetRowIdParams,
++  GridReadyEvent,
++  ModuleRegistry,
++  TooltipModule,
++  ValidationModule,
++} from "ag-grid-community";
++import {
++  CellSelectionModule,
++  ClipboardModule,
++  ColumnMenuModule,
++  ColumnsToolPanelModule,
++  ContextMenuModule,
++  ExcelExportModule,
++  RowGroupingModule,
++} from "ag-grid-enterprise";
++import { AgGridReact } from "ag-grid-react";
++import { AxiosError } from "axios";
++import i18next from "i18next";
++import { useRouter } from "next/router";
++import { type JSX, useCallback, useEffect, useMemo, useRef, useState } from "react";
++import { useTranslation } from "react-i18next";
++import useSWR from "swr";
++
++import { LoaderCircle, PageHeader, Toolbox } from "@plaio/components/ui";
++import { post, useLayoutStore, useOrgMembershipByPathParam, useTokenFetcher, useWorksheetStore } from "@plaio/data-access";
++import {
++  GridValue,
++  NewWorksheetRow,
++  ToolboxItem,
++  ToolboxItemTypeEnum,
++  UserFilter,
++} from "@plaio/shared-types";
++import { getPlaioGridTheme, makeClientSideConfig, toolboxIconClass } from "@plaio/util";
++
++import { assembleCustomReport } from "../../lib/custom-reports/assemble";
++import { buildColumnDefs } from "../../lib/custom-reports/columns";
++import { toWorksheetStructure } from "../../lib/custom-reports/to-worksheet";
++import { CustomReport } from "../../lib/custom-reports/types";
++import { A11yTab } from "../mui/tabs";
++import { WorksheetFilterButton } from "../new-worksheet/worksheet-filters";
++import { WorksheetTab } from "../worksheet/worksheet-tab";
++
++ModuleRegistry.registerModules([
++  CellSelectionModule,
++  ClipboardModule,
++  ColumnMenuModule,
++  ColumnsToolPanelModule,
++  ContextMenuModule,
++  CsvExportModule,
++  ExcelExportModule,
++  RowGroupingModule,
++  TooltipModule,
++  ValidationModule,
++]);
++
++export function ReportPage(): JSX.Element {
++  const { t } = useTranslation();
++  const router = useRouter();
++  const orgMembership = useOrgMembershipByPathParam();
++  const tokenFetcher = useTokenFetcher();
++  const raiseError = useLayoutStore((state) => state.raiseError);
++  const theme = useLayoutStore((state) => state.layout.theme);
++  const clientSideConfig = makeClientSideConfig();
++
++  const reportId = Array.isArray(router.query.id) ? router.query.id[0] : router.query.id;
++
++  const {
++    data: report,
++    isLoading: isLoadingReport,
++    mutate: mutateReport,
++  } = useSWR<CustomReport, AxiosError>(
++    reportId ? `${clientSideConfig.engineURL}/v2/custom-reports/${reportId}` : null,
++    tokenFetcher,
++  );
++
++  const [worksheetData, setWorksheetData] = useState<Record<string, any[]>>({});
++  const [isLoadingData, setIsLoadingData] = useState(false);
++  const [selectedTab, setSelectedTab] = useState(0);
++  const [isUpdating, setIsUpdating] = useState(false);
++  const [updatePrompt, setUpdatePrompt] = useState("");
++  const [showUpdateInput, setShowUpdateInput] = useState(false);
++
++  const gridRef = useRef<AgGridReact>(null);
++  const updateInputRef = useRef<HTMLInputElement>(null);
++  const plaioGridTheme = useMemo(() => getPlaioGridTheme(theme), [theme]);
++
++  // Build synthetic worksheet structure for filter/toolbox compatibility
++  const worksheet = useMemo(() => {
++    if (!report?.definition || !reportId) return null;
++    return toWorksheetStructure(reportId, report.title, report.definition);
++  }, [report?.definition, reportId]);
++
++  const worksheetId = reportId ?? "";
++  const userFilters = useWorksheetStore((state) => state.worksheets?.[worksheetId]?.userFilters) ?? [];
++
++  const fetchWorksheetData = useCallback(async () => {
++    if (!report?.definition) return;
++
++    const wsIds = new Set<string>();
++    wsIds.add(report.definition.primary_worksheet_id);
++    for (const join of report.definition.joins) {
++      wsIds.add(join.right_worksheet_id);
++    }
++
++    setIsLoadingData(true);
++    try {
++      const entries = await Promise.all(
++        [...wsIds].map(async (wsId) => {
++          const result = await post(`/v2/worksheets/${wsId}/query`, { selectors: {} }, orgMembership);
++          const rows = (Array.isArray(result) ? result : []).map((row: any) => row.data ?? row);
++          return [wsId, rows] as const;
++        }),
++      );
++      setWorksheetData(Object.fromEntries(entries));
++    } catch (error: any) {
++      raiseError({
++        honeycombTraceparent: error.honeycombTraceparent,
++        message: error.message ?? i18next.format(t("common.something_went_wrong"), "capitalize"),
++        showInDialog: false,
++        status: error.status,
++        title: error.title ?? i18next.format(t("common.something_went_wrong"), "capitalize"),
++      });
++    } finally {
++      setIsLoadingData(false);
++    }
++  }, [report, orgMembership, raiseError, t]);
++
++  useEffect(() => {
++    if (report?.definition) {
++      fetchWorksheetData();
++    }
++  }, [report?.definition]); // eslint-disable-line react-hooks/exhaustive-deps
++
++  const assembledRows = useMemo(() => {
++    if (!report?.definition || Object.keys(worksheetData).length === 0) return [];
++    try {
++      return assembleCustomReport(report.definition, worksheetData);
++    } catch {
++      return [];
++    }
++  }, [report?.definition, worksheetData]);
++
++  // Apply user filters (client-side text/list filtering)
++  const filteredRows = useMemo(() => {
++    if (userFilters.length === 0) return assembledRows;
++    return assembledRows.filter((row) =>
++      userFilters.every((f) => {
++        const value = row[f.columnName];
++        if (f.text) {
++          return value != null && String(value).toLowerCase().includes(f.text.toLowerCase());
++        }
++        if (f.list && f.list.length > 0) {
++          return f.list.map((v) => String(v).toLowerCase()).includes(String(value ?? "").toLowerCase());
++        }
++        return true;
++      }),
++    );
++  }, [assembledRows, userFilters]);
++
++  const columnDefs = useMemo(() => {
++    if (!report?.definition) return [];
++    return buildColumnDefs(report.definition.columns, assembledRows, report.definition.default_grouping);
++  }, [report?.definition, assembledRows]);
++
++  const defaultColDef = useMemo<ColDef>(
++    () => ({
++      editable: false,
++      filter: true,
++      resizable: true,
++      sortable: true,
++    }),
++    [],
++  );
++
++  const onGridReady = useCallback((_event: GridReadyEvent) => {
++    gridRef.current?.api?.sizeColumnsToFit();
++  }, []);
++
++  const exportExcel = useCallback(() => {
++    gridRef.current?.api?.exportDataAsExcel({ fileName: report?.title ?? "report" });
++  }, [report]);
++
++  const handleUpdateReport = useCallback(async () => {
++    if (!updatePrompt.trim() || !report?.definition || !reportId) return;
++    setIsUpdating(true);
++    try {
++      const result = await post(
++        `/v2/custom-reports/${reportId}/update`,
++        { prompt: updatePrompt, current_definition: report.definition },
++        orgMembership,
++      );
++      setUpdatePrompt("");
++      setShowUpdateInput(false);
++      mutateReport(); // Refetch report
++    } catch (error: any) {
++      raiseError({
++        honeycombTraceparent: error.honeycombTraceparent,
++        message: error.message ?? i18next.format(t("common.something_went_wrong"), "capitalize"),
++        showInDialog: true,
++        status: error.status,
++        title: error.title ?? i18next.format(t("common.something_went_wrong"), "capitalize"),
++      });
++    } finally {
++      setIsUpdating(false);
++    }
++  }, [updatePrompt, report, reportId, orgMembership, raiseError, mutateReport, t]);
++
++  // Toolbox items
++  const toolboxItems: ToolboxItem[] = useMemo(
++    () => [
++      {
++        id: "update-report",
++        type: ToolboxItemTypeEnum.Button,
++        icon: <AutoAwesomeOutlined className={toolboxIconClass} />,
++        title: i18next.format(t("common._custom_report.update_report"), "capitalize"),
++        onClick: () => {
++          setShowUpdateInput(true);
++          setTimeout(() => updateInputRef.current?.focus(), 100);
++        },
++      },
++      { id: "action-divider", type: ToolboxItemTypeEnum.Divider },
++      {
++        id: "refresh-data",
++        type: ToolboxItemTypeEnum.Button,
++        icon: <RefreshOutlined className={toolboxIconClass} />,
++        title: i18next.format(t("worksheet._grid_toolbox.refresh_data"), "capitalize"),
++        onClick: fetchWorksheetData,
++      },
++      {
++        id: "export-excel",
++        type: ToolboxItemTypeEnum.Button,
++        icon: <FileDownloadOutlined className={toolboxIconClass} />,
++        title: i18next.format(t("worksheet._grid_toolbox.export_excel"), "capitalize"),
++        onClick: exportExcel,
++      },
++    ],
++    [t, fetchWorksheetData, exportExcel],
++  );
++
++  if (isLoadingReport) {
++    return (
++      <div className="flex h-full items-center justify-center">
++        <LoaderCircle height={48} width={48} />
++      </div>
++    );
++  }
++
++  if (!report || !worksheet) {
++    return (
++      <div className="flex h-full items-center justify-center">
++        <span>{i18next.format(t("common.page_not_found"), "capitalize")}</span>
++      </div>
++    );
++  }
++
++  return (
++    <div className="flex h-full flex-col py-2">
++      <PageHeader
++        counter={filteredRows.length > 0 ? String(filteredRows.length) : undefined}
++        description={report.definition.description ?? undefined}
++        showLoader={isLoadingData || isUpdating}
++        title={report.title}
++      >
++        <div className="flex w-full items-center gap-2">
++          <div className="grow" />
++          <div className="flex flex-row items-center gap-2">
++            {selectedTab === 0 && (
++              <div className="-mr-2">
++                <WorksheetFilterButton
++                  columns={worksheet.columns}
++                  onToggleFilterRow={() => {}}
++                  rowsData={assembledRows as Record<string, GridValue>[]}
++                  showFilterRow={false}
++                  userFilters={userFilters}
++                  worksheetId={worksheetId}
++                />
++              </div>
++            )}
++            <Toolbox
++              inline
++              items={toolboxItems}
++              showDot={false}
++              showSparkles={false}
++              title={i18next.format(t("common.more"), "capitalize")}
++            />
++          </div>
++        </div>
++      </PageHeader>
++
++      {/* Update report input bar */}
++      {showUpdateInput && (
++        <div className="flex items-center gap-2 border-b border-gray-200 px-4 py-2 dark:border-gray-700">
++          <TextField
++            autoFocus
++            disabled={isUpdating}
++            fullWidth
++            inputRef={updateInputRef}
++            onKeyDown={(e) => {
++              if (e.key === "Enter" && !e.shiftKey) {
++                e.preventDefault();
++                handleUpdateReport();
++              }
++              if (e.key === "Escape") {
++                setShowUpdateInput(false);
++                setUpdatePrompt("");
++              }
++            }}
++            onChange={(e) => setUpdatePrompt(e.target.value)}
++            placeholder={t("common._custom_report.placeholder_refine")}
++            size="small"
++            value={updatePrompt}
++          />
++          {isUpdating && <LoaderCircle height={20} width={20} />}
++        </div>
++      )}
++
++      {/* Tabs */}
++      <Box component="nav" className="flex w-full items-center pr-2">
++        <Tabs onChange={(_, v) => setSelectedTab(v)} value={selectedTab}>
++          <Tab
++            {...A11yTab({ name: "grid", prefix: "custom-report" })}
++            label={
++              <WorksheetTab
++                counter={null}
++                hasError={false}
++                icon={<MenuOutlined />}
++                isLoading={isLoadingData}
++                label={i18next.format(t("worksheet.grid"), "capitalize")}
++              />
++            }
++            value={0}
++          />
++          <Tab
++            {...A11yTab({ name: "tasks", prefix: "custom-report" })}
++            label={
++              <WorksheetTab
++                counter={0}
++                hasError={false}
++                icon={<CheckCircleOutlineOutlined />}
++                isLoading={false}
++                label={i18next.format(t("task.tasks"), "capitalize")}
++              />
++            }
++            value={1}
++          />
++        </Tabs>
++      </Box>
++
++      {/* Grid tab */}
++      {selectedTab === 0 && (
++        <div className="flex-1">
++          <AgGridReact
++            ref={gridRef}
++            autoGroupColumnDef={{ minWidth: 200 }}
++            columnDefs={columnDefs}
++            defaultColDef={defaultColDef}
++            getRowId={(params: GetRowIdParams) => params.data.id}
++            grandTotalRow="bottom"
++            groupDefaultExpanded={-1}
++            onGridReady={onGridReady}
++            overlayNoRowsTemplate={i18next.format(t("common.no_items_found"), "capitalize")}
++            rowData={filteredRows}
++            suppressAggFuncInHeader={true}
++            theme={plaioGridTheme}
++            tooltipShowDelay={1000}
++          />
++        </div>
++      )}
++
++      {/* Tasks tab — placeholder for now */}
++      {selectedTab === 1 && (
++        <div className="flex h-full items-center justify-center text-gray-400">
++          <span>{i18next.format(t("worksheet.tasks"), "capitalize")}</span>
++        </div>
++      )}
++    </div>
++  );
++}
+diff --git a/next/components/new-worksheet/toolbox.tsx b/next/components/new-worksheet/toolbox.tsx
+index eec842a743..e4b9db6263 100644
+--- a/next/components/new-worksheet/toolbox.tsx
++++ b/next/components/new-worksheet/toolbox.tsx
+@@ -1,5 +1,6 @@
+ import {
+   AddOutlined,
++  AutoAwesomeOutlined,
+   CompareArrowsOutlined,
+   DeleteOutline,
+   EditOutlined,
+@@ -526,6 +527,18 @@
+       ...(!isDetailGrid && actionItems.length > 0
+         ? [...actionItems, { id: "action-divider", type: ToolboxItemTypeEnum.Divider }]
+         : []),
++      ...(!isDetailGrid
++        ? [
++            {
++              id: "create-custom-report",
++              type: ToolboxItemTypeEnum.Button,
++              icon: <AutoAwesomeOutlined className={toolboxIconClass} />,
++              title: i18next.format(t("common._custom_report.create_from_worksheet"), "capitalize"),
++              onClick: () => setRouteToPage(`${orgSaveUrl}/custom-reports/new?worksheetId=${worksheetId}`),
++            },
++            { id: "custom-report-divider", type: ToolboxItemTypeEnum.Divider },
++          ]
++        : []),
+       ...(isDetailGrid && worksheet.ui_configuration?.full_worksheet_target_id
+         ? [
+             {
+diff --git a/next/lib/custom-reports/assemble.ts b/next/lib/custom-reports/assemble.ts
+new file mode 100644
+index 0000000000..5f81b0f59d
+--- /dev/null
++++ b/next/lib/custom-reports/assemble.ts
+@@ -0,0 +1,89 @@
++import { evaluateExpression } from "./expression";
++import { CustomReportDefinition } from "./types";
++
++const COMPOSITE_KEY_SEPARATOR = "\x00";
++
++function buildKeyString(row: Record<string, any>, keys: string | string[]): string {
++  const keyArray = Array.isArray(keys) ? keys : [keys];
++  return keyArray.map((k) => String(row[k] ?? "")).join(COMPOSITE_KEY_SEPARATOR);
++}
++
++function getRowId(row: Record<string, any>): string {
++  return String(row.id ?? "");
++}
++
++export function assembleCustomReport(
++  definition: CustomReportDefinition,
++  worksheetData: Record<string, any[]>,
++): Record<string, any>[] {
++  let rows = (worksheetData[definition.primary_worksheet_id] ?? []).map((row) => ({
++    ...row,
++    _cr_id: getRowId(row),
++  }));
++
++  for (const join of definition.joins) {
++    const rightRows = worksheetData[join.right_worksheet_id] ?? [];
++    const lookup = new Map<string, Record<string, any>[]>();
++    for (const rightRow of rightRows) {
++      const key = buildKeyString(rightRow, join.right_key);
++      const existing = lookup.get(key);
++      if (existing) {
++        existing.push(rightRow);
++      } else {
++        lookup.set(key, [rightRow]);
++      }
++    }
++
++    rows = rows.flatMap((row) => {
++      const key = buildKeyString(row, join.left_key);
++      const matches = lookup.get(key);
++
++      if (matches && matches.length > 0) {
++        return matches.map((match) => ({
++          ...row,
++          ...match,
++          _cr_id: `${row._cr_id}|${getRowId(match)}`,
++        }));
++      }
++
++      if (join.join_type === "left") {
++        return [row];
++      }
++
++      return [];
++    });
++  }
++
++  return rows.map((row) => {
++    const result: Record<string, any> = { id: row._cr_id };
++
++    for (const col of definition.columns) {
++      if (col.source && col.time_series_format != null) {
++        // Keep timeseries dict as-is — AG Grid resolves "col.dateKey" via dot-path access
++        const tsValue = row[col.source.column_id];
++        result[col.id] = tsValue && typeof tsValue === "object" && !Array.isArray(tsValue) ? tsValue : null;
++      } else if (col.source) {
++        result[col.id] = row[col.source.column_id] ?? null;
++      } else if (col.computed) {
++        const numericValues: Record<string, number | null> = {};
++        for (const otherCol of definition.columns) {
++          if (otherCol.source && result[otherCol.id] !== undefined) {
++            const val = result[otherCol.id];
++            numericValues[otherCol.id] = typeof val === "number" ? val : null;
++          }
++        }
++        for (const otherCol of definition.columns) {
++          if (otherCol.source) {
++            const val = row[otherCol.source.column_id];
++            numericValues[otherCol.source.column_id] = typeof val === "number" ? val : null;
++          }
++        }
++        result[col.id] = evaluateExpression(col.computed.expression, numericValues);
++      } else {
++        result[col.id] = row[col.id] ?? null;
++      }
++    }
++
++    return result;
++  });
++}
+diff --git a/next/lib/custom-reports/columns.ts b/next/lib/custom-reports/columns.ts
+new file mode 100644
+index 0000000000..1c7e6fbe60
+--- /dev/null
++++ b/next/lib/custom-reports/columns.ts
+@@ -0,0 +1,148 @@
++import { ColDef, ValueFormatterParams } from "ag-grid-community";
++
++import { ReportColumnDefinition } from "./types";
++
++function mapCellDataType(dataType: string): string {
++  switch (dataType) {
++    case "INTEGER":
++    case "DECIMAL":
++      return "number";
++    case "BOOLEAN":
++      return "boolean";
++    case "DATE":
++      return "dateString";
++    default:
++      return "text";
++  }
++}
++
++function mapWidth(width?: string): number | undefined {
++  switch (width) {
++    case "SMALL":
++      return 100;
++    case "MEDIUM":
++      return 150;
++    case "LARGE":
++      return 250;
++    default:
++      return undefined;
++  }
++}
++
++/**
++ * Build AG Grid column defs from report column definitions.
++ * For TIMESERIES columns, we need the actual row data to discover the date keys
++ * and expand them into individual columns.
++ */
++export function buildColumnDefs(
++  columns: ReportColumnDefinition[],
++  rowData?: Record<string, any>[],
++  defaultGrouping?: string[],
++): ColDef[] {
++  const defs: ColDef[] = [];
++  const groupOrder = new Map((defaultGrouping ?? []).map((id, idx) => [id, idx]));
++
++  for (const col of columns) {
++    const isTimeSeries = col.time_series_format != null;
++    if (isTimeSeries && rowData && rowData.length > 0) {
++      // Find the first row that has this timeseries column with data
++      const sampleRow = rowData.find((r) => r[col.id] && typeof r[col.id] === "object");
++      if (sampleRow) {
++        const tsData = sampleRow[col.id] as Record<string, any>;
++        const dateKeys = Object.keys(tsData).sort();
++        for (const dateKey of dateKeys) {
++          const fieldId = `${col.id}.${dateKey}`;
++          defs.push({
++            field: fieldId,
++            headerName: formatDateHeader(dateKey, col.time_series_format),
++            headerTooltip: col.description,
++            editable: false,
++            cellDataType: "number",
++            aggFunc: col.aggregator?.toLowerCase(),
++            minWidth: 100,
++            filter: false,
++            valueFormatter: (params: ValueFormatterParams) => {
++              if (params.value == null) return "";
++              const val = typeof params.value === "number" ? params.value : Number(params.value);
++              if (isNaN(val)) return "";
++              return col.postfix ? `${val}${col.postfix}` : String(val);
++            },
++          });
++        }
++      }
++    } else if (isTimeSeries) {
++      // No row data yet — add a placeholder column
++      defs.push({
++        field: col.id,
++        headerName: col.title,
++        headerTooltip: col.description,
++        editable: false,
++        hide: true,
++      });
++    } else {
++      const isGrouped = groupOrder.has(col.id);
++      const colDef: ColDef = {
++        field: col.id,
++        headerName: col.title,
++        headerTooltip: col.description,
++        editable: false,
++        hide: isGrouped || col.default_visible === false,
++        cellDataType: mapCellDataType(col.data_type),
++        rowGroup: isGrouped || undefined,
++        rowGroupIndex: isGrouped ? groupOrder.get(col.id) : undefined,
++      };
++
++      if (col.aggregator) {
++        colDef.aggFunc = col.aggregator.toLowerCase();
++      }
++
++      const width = mapWidth(col.width);
++      if (width) {
++        colDef.minWidth = width;
++      }
++
++      if (col.postfix) {
++        const postfix = col.postfix;
++        colDef.valueFormatter = (params: ValueFormatterParams) => {
++          if (params.value == null) return "";
++          return `${params.value}${postfix}`;
++        };
++      }
++
++      if (col.default_ui_filterable !== false) {
++        colDef.filter = true;
++      }
++
++      defs.push(colDef);
++    }
++  }
++
++  return defs;
++}
++
++function formatDateHeader(dateKey: string, timeSeriesFormat?: string | null): string {
++  try {
++    const date = new Date(dateKey);
++    if (isNaN(date.getTime())) return dateKey;
++
++    switch (timeSeriesFormat) {
++      case "MONTHLY":
++        return date.toLocaleDateString(undefined, { year: "numeric", month: "short" });
++      case "WEEKLY":
++        return `W${getWeekNumber(date)} ${date.getFullYear()}`;
++      case "DAILY":
++        return date.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
++      default:
++        return date.toLocaleDateString(undefined, { year: "numeric", month: "short" });
++    }
++  } catch {
++    return dateKey;
++  }
++}
++
++function getWeekNumber(date: Date): number {
++  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
++  d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay() || 7));
++  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
++  return Math.ceil(((d.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
++}
+diff --git a/next/lib/custom-reports/expression.ts b/next/lib/custom-reports/expression.ts
+new file mode 100644
+index 0000000000..1da37b5944
+--- /dev/null
++++ b/next/lib/custom-reports/expression.ts
+@@ -0,0 +1,205 @@
++type Token =
++  | { type: "number"; value: number }
++  | { type: "ident"; value: string }
++  | { type: "op"; value: string }
++  | { type: "lparen" }
++  | { type: "rparen" };
++
++function tokenize(expression: string): Token[] {
++  const tokens: Token[] = [];
++  let i = 0;
++
++  while (i < expression.length) {
++    const ch = expression[i];
++
++    if (ch === " " || ch === "\t") {
++      i++;
++      continue;
++    }
++
++    if (ch === "(") {
++      tokens.push({ type: "lparen" });
++      i++;
++      continue;
++    }
++
++    if (ch === ")") {
++      tokens.push({ type: "rparen" });
++      i++;
++      continue;
++    }
++
++    if (ch === "+" || ch === "-" || ch === "*" || ch === "/") {
++      tokens.push({ type: "op", value: ch });
++      i++;
++      continue;
++    }
++
++    if (ch >= "0" && ch <= "9" || ch === ".") {
++      let num = "";
++      while (i < expression.length && (expression[i] >= "0" && expression[i] <= "9" || expression[i] === ".")) {
++        num += expression[i];
++        i++;
++      }
++      tokens.push({ type: "number", value: parseFloat(num) });
++      continue;
++    }
++
++    if ((ch >= "a" && ch <= "z") || (ch >= "A" && ch <= "Z") || ch === "_") {
++      let ident = "";
++      while (
++        i < expression.length &&
++        ((expression[i] >= "a" && expression[i] <= "z") ||
++          (expression[i] >= "A" && expression[i] <= "Z") ||
++          (expression[i] >= "0" && expression[i] <= "9") ||
++          expression[i] === "_")
++      ) {
++        ident += expression[i];
++        i++;
++      }
++      tokens.push({ type: "ident", value: ident });
++      continue;
++    }
++
++    throw new Error(`Unexpected character: ${ch}`);
++  }
++
++  return tokens;
++}
++
++class Parser {
++  private tokens: Token[];
++  private pos: number;
++
++  constructor(tokens: Token[]) {
++    this.tokens = tokens;
++    this.pos = 0;
++  }
++
++  private peek(): Token | undefined {
++    return this.tokens[this.pos];
++  }
++
++  private consume(): Token {
++    return this.tokens[this.pos++];
++  }
++
++  parseExpression(): (values: Record<string, number | null>) => number | null {
++    return this.parseAddSub();
++  }
++
++  private isOp(chars: string[]): boolean {
++    const t = this.peek();
++    return t !== undefined && t.type === "op" && chars.includes(t.value);
++  }
++
++  private parseAddSub(): (values: Record<string, number | null>) => number | null {
++    let left = this.parseMulDiv();
++
++    while (this.isOp(["+", "-"])) {
++      const op = (this.consume() as { type: "op"; value: string }).value;
++      const right = this.parseMulDiv();
++      const prevLeft = left;
++      if (op === "+") {
++        left = (v) => {
++          const l = prevLeft(v);
++          const r = right(v);
++          if (l === null || r === null) return null;
++          return l + r;
++        };
++      } else {
++        left = (v) => {
++          const l = prevLeft(v);
++          const r = right(v);
++          if (l === null || r === null) return null;
++          return l - r;
++        };
++      }
++    }
++
++    return left;
++  }
++
++  private parseMulDiv(): (values: Record<string, number | null>) => number | null {
++    let left = this.parseAtom();
++
++    while (this.isOp(["*", "/"])) {
++      const op = (this.consume() as { type: "op"; value: string }).value;
++      const right = this.parseAtom();
++      const prevLeft = left;
++      if (op === "*") {
++        left = (v) => {
++          const l = prevLeft(v);
++          const r = right(v);
++          if (l === null || r === null) return null;
++          return l * r;
++        };
++      } else {
++        left = (v) => {
++          const l = prevLeft(v);
++          const r = right(v);
++          if (l === null || r === null) return null;
++          if (r === 0) return null;
++          return l / r;
++        };
++      }
++    }
++
++    return left;
++  }
++
++  private parseAtom(): (values: Record<string, number | null>) => number | null {
++    const token = this.peek();
++
++    if (!token) {
++      throw new Error("Unexpected end of expression");
++    }
++
++    if (token.type === "number") {
++      this.consume();
++      const val = token.value;
++      return () => val;
++    }
++
++    if (token.type === "ident") {
++      this.consume();
++      const name = token.value;
++      return (v) => {
++        if (!(name in v)) return null;
++        return v[name];
++      };
++    }
++
++    if (token.type === "lparen") {
++      this.consume();
++      const expr = this.parseExpression();
++      const closing = this.consume();
++      if (!closing || closing.type !== "rparen") {
++        throw new Error("Expected closing parenthesis");
++      }
++      return expr;
++    }
++
++    if (token.type === "op" && token.value === "-") {
++      this.consume();
++      const operand = this.parseAtom();
++      return (v) => {
++        const val = operand(v);
++        if (val === null) return null;
++        return -val;
++      };
++    }
++
++    throw new Error(`Unexpected token: ${JSON.stringify(token)}`);
++  }
++}
++
++export function evaluateExpression(
++  expression: string,
++  values: Record<string, number | null>,
++): number | null {
++  const tokens = tokenize(expression);
++  const parser = new Parser(tokens);
++  const evaluate = parser.parseExpression();
++  return evaluate(values);
++}
+diff --git a/next/lib/custom-reports/to-worksheet.ts b/next/lib/custom-reports/to-worksheet.ts
+new file mode 100644
+index 0000000000..77c58e0046
+--- /dev/null
++++ b/next/lib/custom-reports/to-worksheet.ts
+@@ -0,0 +1,91 @@
++import {
++  AccessLevelEnum,
++  ColumnDataTypeEnum,
++  ColumnWidthEnum,
++  NewWorksheet,
++  NewWorksheetColumn,
++  TimeSeriesFormatEnum,
++} from "@plaio/shared-types";
++
++import { CustomReportDefinition, ReportColumnDefinition } from "./types";
++
++function mapDataType(dt: string): ColumnDataTypeEnum {
++  switch (dt) {
++    case "INTEGER":
++      return ColumnDataTypeEnum.Integer;
++    case "DECIMAL":
++      return ColumnDataTypeEnum.Decimal;
++    case "BOOLEAN":
++      return ColumnDataTypeEnum.Boolean;
++    case "DATE":
++      return ColumnDataTypeEnum.Date;
++    case "DATETIME":
++      return ColumnDataTypeEnum.DateTime;
++    case "STRING":
++      return ColumnDataTypeEnum.String;
++    default:
++      return ColumnDataTypeEnum.String;
++  }
++}
++
++function mapWidth(w?: string): ColumnWidthEnum {
++  switch (w) {
++    case "SMALL":
++      return ColumnWidthEnum.Small;
++    case "LARGE":
++      return ColumnWidthEnum.Large;
++    default:
++      return ColumnWidthEnum.Medium;
++  }
++}
++
++function mapTimeSeriesFormat(f?: string | null): TimeSeriesFormatEnum | null {
++  if (!f) return null;
++  return f as TimeSeriesFormatEnum;
++}
++
++function toWorksheetColumn(col: ReportColumnDefinition, groupIndex: number | null): NewWorksheetColumn {
++  return {
++    aggregator: (col.aggregator as any) ?? null,
++    data_type: mapDataType(col.data_type),
++    description: col.description ?? "",
++    group_order: groupIndex,
++    id: col.id,
++    is_dropdown: false,
++    is_editable: false,
++    is_ui_filter_dropdown: col.is_ui_filter_dropdown ?? false,
++    is_ui_filterable: col.default_ui_filterable ?? false,
++    is_visible: col.default_visible !== false,
++    num_digits: null,
++    postfix: col.postfix ?? null,
++    postfix_from_column: null,
++    postfix_separator: null,
++    prefix: null,
++    prefix_from_column: null,
++    prefix_separator: null,
++    styles: [],
++    title: col.title,
++    time_series_format: mapTimeSeriesFormat(col.time_series_format),
++    width: mapWidth(col.width),
++  };
++}
++
++export function toWorksheetStructure(reportId: string, title: string, definition: CustomReportDefinition): NewWorksheet {
++  const groupOrder = new Map((definition.default_grouping ?? []).map((id, idx) => [id, idx]));
++
++  return {
++    access_level: AccessLevelEnum.View,
++    actions: [],
++    columns: definition.columns.map((col) => toWorksheetColumn(col, groupOrder.get(col.id) ?? null)),
++    description: definition.description,
++    id: reportId,
++    required_selectors: [],
++    row_tabs: [],
++    title,
++    ui_configuration: {
++      full_worksheet_target_id: null,
++      group_suppress_count: false,
++      tree_data: null,
++    },
++  };
++}
+diff --git a/next/lib/custom-reports/types.ts b/next/lib/custom-reports/types.ts
+new file mode 100644
+index 0000000000..09495c34cf
+--- /dev/null
++++ b/next/lib/custom-reports/types.ts
+@@ -0,0 +1,50 @@
++export interface ColumnSource {
++  worksheet_id: string;
++  column_id: string;
++}
++
++export interface ComputedExpression {
++  expression: string;
++}
++
++export interface ReportColumnDefinition {
++  id: string;
++  title: string;
++  description?: string;
++  source?: ColumnSource;
++  computed?: ComputedExpression;
++  data_type: string;
++  aggregator?: string | null;
++  width?: string;
++  postfix?: string | null;
++  default_visible?: boolean;
++  default_ui_filterable?: boolean;
++  is_ui_filter_dropdown?: boolean;
++  time_series_format?: string | null;
++}
++
++export interface JoinSpec {
++  left_worksheet_id: string;
++  right_worksheet_id: string;
++  left_key: string | string[];
++  right_key: string | string[];
++  join_type: "inner" | "left";
++}
++
++export interface CustomReportDefinition {
++  description: string;
++  primary_worksheet_id: string;
++  columns: ReportColumnDefinition[];
++  joins: JoinSpec[];
++  default_grouping?: string[];
++}
++
++export interface CustomReport {
++  id: string;
++  report_id: string;
++  title: string;
++  user_prompt: string;
++  definition: CustomReportDefinition;
++  created_at: string;
++  updated_at: string;
++}
+diff --git a/next/pages/[org]/custom-report/[id].tsx b/next/pages/[org]/custom-report/[id].tsx
+new file mode 100644
+index 0000000000..d3aaec305e
+--- /dev/null
++++ b/next/pages/[org]/custom-report/[id].tsx
+@@ -0,0 +1,13 @@
++import dynamic from "next/dynamic";
++import { type JSX } from "react";
++
++const ReportPage = dynamic(
++  () => import("../../../components/custom-reports/report-page").then((mod) => mod.ReportPage),
++  { ssr: false },
++);
++
++export function CustomReportPage(): JSX.Element {
++  return <ReportPage />;
++}
++
++export default CustomReportPage;
+diff --git a/next/pages/[org]/custom-reports/new.tsx b/next/pages/[org]/custom-reports/new.tsx
+new file mode 100644
+index 0000000000..975927e490
+--- /dev/null
++++ b/next/pages/[org]/custom-reports/new.tsx
+@@ -0,0 +1,13 @@
++import dynamic from "next/dynamic";
++import { type JSX } from "react";
++
++const ReportBuilder = dynamic(
++  () => import("../../../components/custom-reports/report-builder").then((mod) => mod.ReportBuilder),
++  { ssr: false },
++);
++
++export function NewCustomReportPage(): JSX.Element {
++  return <ReportBuilder />;
++}
++
++export default NewCustomReportPage;
+diff --git a/next/public/locales/de/common.json b/next/public/locales/de/common.json
+index 2ce6679438..7e13a39dd4 100644
+--- a/next/public/locales/de/common.json
++++ b/next/public/locales/de/common.json
+@@ -52,6 +52,27 @@
+     },
+     "message": "Sind Sie sicher, dass Sie sich von PLAIO abmelden möchten?"
+   },
++  "_custom_report": {
++    "create_from_worksheet": "create custom report from this worksheet",
++    "custom_report": "benutzerdefinierter Bericht",
++    "describe_your_report": "beschreiben Sie den Bericht, den Sie erstellen möchten",
++    "export_to_excel": "nach Excel exportieren",
++    "generate": "generieren",
++    "generate_report": "Bericht generieren",
++    "generating": "wird generiert...",
++    "new_custom_report": "Berichts-Builder",
++    "no_columns": "keine Spalten definiert",
++    "placeholder_initial": "beschreiben Sie den Bericht, den Sie erstellen möchten...",
++    "placeholder_refine": "Bericht verfeinern...",
++    "preview": "Vorschau",
++    "prompt_placeholder": "z.B. Zeige mir Prognose vs. Ist nach Produkt mit Abweichungsprozentsatz",
++    "report_id": "Bericht-ID",
++    "report_id_helper": "eindeutige Kennung für diesen Bericht (wird in der URL verwendet)",
++    "report_title": "Berichtstitel",
++    "save_report": "Bericht speichern",
++    "send": "senden",
++    "update_report": "Bericht aktualisieren"
++  },
+   "_menu": {
+     "collapse": "Menü einklappen",
+     "expand": "Menü erweitern"
+diff --git a/next/public/locales/en/common.json b/next/public/locales/en/common.json
+index 80d7395ef2..76b8a4adb7 100644
+--- a/next/public/locales/en/common.json
++++ b/next/public/locales/en/common.json
+@@ -52,6 +52,27 @@
+     },
+     "message": "Are you sure you want to logout from PLAIO?"
+   },
++  "_custom_report": {
++    "create_from_worksheet": "create custom report from this worksheet",
++    "custom_report": "custom report",
++    "describe_your_report": "describe the report you want to build",
++    "export_to_excel": "export to Excel",
++    "generate": "generate",
++    "generate_report": "generate report",
++    "generating": "generating...",
++    "new_custom_report": "custom report builder",
++    "no_columns": "no columns defined",
++    "placeholder_initial": "describe the report you want to create...",
++    "placeholder_refine": "refine your report...",
++    "preview": "preview",
++    "prompt_placeholder": "e.g. Show me forecast vs actual by product with variance percentage",
++    "report_id": "report ID",
++    "report_id_helper": "unique identifier for this report (used in the URL)",
++    "report_title": "report title",
++    "save_report": "save report",
++    "send": "send",
++    "update_report": "update report"
++  },
+   "_menu": {
+     "collapse": "collapse menu",
+     "expand": "expand menu"
+diff --git a/next/public/locales/es/common.json b/next/public/locales/es/common.json
+index fc6accbc55..e07c819a2c 100644
+--- a/next/public/locales/es/common.json
++++ b/next/public/locales/es/common.json
+@@ -52,6 +52,27 @@
+     },
+     "message": "¿Está seguro de que desea cerrar sesión en PLAIO?"
+   },
++  "_custom_report": {
++    "create_from_worksheet": "create custom report from this worksheet",
++    "custom_report": "informe personalizado",
++    "describe_your_report": "describe el informe que deseas crear",
++    "export_to_excel": "exportar a Excel",
++    "generate": "generar",
++    "generate_report": "generar informe",
++    "generating": "generando...",
++    "new_custom_report": "constructor de informes",
++    "no_columns": "no hay columnas definidas",
++    "placeholder_initial": "describe el informe que deseas crear...",
++    "placeholder_refine": "refinar tu informe...",
++    "preview": "vista previa",
++    "prompt_placeholder": "ej. Muéstrame pronóstico vs real por producto con porcentaje de variación",
++    "report_id": "ID del informe",
++    "report_id_helper": "identificador único para este informe (usado en la URL)",
++    "report_title": "título del informe",
++    "save_report": "guardar informe",
++    "send": "enviar",
++    "update_report": "actualizar informe"
++  },
+   "_menu": {
+     "collapse": "Contraer menú",
+     "expand": "Expandir menú"
+diff --git a/next/public/locales/is/common.json b/next/public/locales/is/common.json
+index 5aaba2f354..7bcc561755 100644
+--- a/next/public/locales/is/common.json
++++ b/next/public/locales/is/common.json
+@@ -52,6 +52,27 @@
+     },
+     "message": "Ert þú viss um að vilja skrá þig út úr PLAIO?"
+   },
++  "_custom_report": {
++    "create_from_worksheet": "create custom report from this worksheet",
++    "custom_report": "sérsniðin skýrsla",
++    "describe_your_report": "lýstu skýrslunni sem þú vilt búa til",
++    "export_to_excel": "flytja út í Excel",
++    "generate": "búa til",
++    "generate_report": "búa til skýrslu",
++    "generating": "er búin til...",
++    "new_custom_report": "skýrslusmíði",
++    "no_columns": "engir dálkar skilgreindir",
++    "placeholder_initial": "lýstu skýrslunni sem þú vilt búa til...",
++    "placeholder_refine": "betrumbæta skýrslu...",
++    "preview": "forskoðun",
++    "prompt_placeholder": "t.d. Sýndu mér spá á móti raunverulegu eftir vöru með fráviksprósentu",
++    "report_id": "skýrslu-ID",
++    "report_id_helper": "einstakt auðkenni fyrir þessa skýrslu (notað í slóðinni)",
++    "report_title": "titill skýrslu",
++    "save_report": "vista skýrslu",
++    "send": "senda",
++    "update_report": "uppfæra skýrslu"
++  },
+   "_menu": {
+     "collapse": "minnka leiðarstiku",
+     "expand": "stækka leiðarstiku"
+diff --git a/test-prompt.md b/test-prompt.md
+new file mode 100644
+index 0000000000..57715343f9
+--- /dev/null
++++ b/test-prompt.md
+@@ -0,0 +1,2 @@
++Create a custom report based on the "locations" worksheet. 
++remove the allocation timing, retry the join with items and demand segments, it should be a monthly column, sum all items on the same location to one value each month
+\ No newline at end of file

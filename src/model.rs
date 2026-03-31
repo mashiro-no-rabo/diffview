@@ -671,3 +671,106 @@ impl App {
         self.file_view_down();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parser::parse_diff;
+
+    const FOLD_TEST_DIFF: &str = "\
+diff --git a/zoo/mammals/cat.txt b/zoo/mammals/cat.txt
+--- a/zoo/mammals/cat.txt
++++ b/zoo/mammals/cat.txt
+@@ -1,3 +1,4 @@
+ meow
++purr
+ whiskers
+ paws
+diff --git a/zoo/mammals/dog.txt b/zoo/mammals/dog.txt
+--- a/zoo/mammals/dog.txt
++++ b/zoo/mammals/dog.txt
+@@ -1,3 +1,4 @@
+ woof
++bark
+ tail
+ ears
+diff --git a/zoo/birds/parrot.txt b/zoo/birds/parrot.txt
+--- a/zoo/birds/parrot.txt
++++ b/zoo/birds/parrot.txt
+@@ -1,3 +1,4 @@
+ squawk
++mimic
+ feathers
+ beak
+";
+
+    #[test]
+    fn fold_folder_hides_everything_underneath() {
+        let mut app = App::new(parse_diff(FOLD_TEST_DIFF));
+
+        let items = app.visible_items();
+        let zoo_pos = items
+            .iter()
+            .position(|i| matches!(&i.kind, VisibleKind::Folder(p) if p == "zoo"))
+            .expect("zoo folder must exist");
+
+        let files_before = items
+            .iter()
+            .filter(|i| matches!(i.kind, VisibleKind::File(_)))
+            .count();
+        assert_eq!(files_before, 3);
+
+        // Fold the zoo folder
+        app.cursor = zoo_pos;
+        app.fold_current();
+
+        let items_after = app.visible_items();
+        let files_after = items_after
+            .iter()
+            .filter(|i| matches!(i.kind, VisibleKind::File(_)))
+            .count();
+        // All files under zoo should be hidden
+        assert_eq!(files_after, 0, "folding zoo must hide all files underneath");
+
+        // Sub-folders should also be hidden
+        let folders_after: Vec<&str> = items_after
+            .iter()
+            .filter_map(|i| match &i.kind {
+                VisibleKind::Folder(p) => Some(p.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(folders_after, vec!["zoo"], "only the folded folder itself remains visible");
+    }
+
+    #[test]
+    fn left_on_file_does_not_hide_file() {
+        let mut app = App::new(parse_diff(FOLD_TEST_DIFF));
+
+        // Navigate to the first file (cat.txt)
+        let items = app.visible_items();
+        let file_pos = items
+            .iter()
+            .position(|i| matches!(i.kind, VisibleKind::File(_)))
+            .expect("must have a file");
+        app.cursor = file_pos;
+
+        let files_before = items
+            .iter()
+            .filter(|i| matches!(i.kind, VisibleKind::File(_)))
+            .count();
+
+        // Press left on a file — should move to parent folder, not hide the file
+        app.fold_current();
+
+        let items_after = app.visible_items();
+        let files_after = items_after
+            .iter()
+            .filter(|i| matches!(i.kind, VisibleKind::File(_)))
+            .count();
+        assert_eq!(
+            files_before, files_after,
+            "pressing left on a file must not hide any files"
+        );
+    }
+}
