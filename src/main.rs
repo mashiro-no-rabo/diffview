@@ -106,6 +106,12 @@ fn event_loop(
                 continue;
             }
 
+            // File view mode intercepts keys
+            if app.file_view.is_some() {
+                handle_file_view_key(app, key.code, key.modifiers);
+                continue;
+            }
+
             match key.code {
                 KeyCode::Esc | KeyCode::Char('q') => {
                     app.should_exit = true;
@@ -125,6 +131,8 @@ fn event_loop(
                 KeyCode::Char(' ') => app.confirm_and_advance(),
                 KeyCode::Char('a') => app.invert_confirmation(),
 
+                KeyCode::Tab => app.enter_file_view(),
+
                 KeyCode::Char('?') => app.show_help = true,
                 KeyCode::Char('f') => {
                     app.show_file_list = true;
@@ -135,6 +143,25 @@ fn event_loop(
                 _ => {}
             }
         }
+    }
+}
+
+fn handle_file_view_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
+    if modifiers.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('c') {
+        app.should_exit = true;
+        return;
+    }
+
+    match code {
+        KeyCode::Up => app.file_view_up(),
+        KeyCode::Down => app.file_view_down(),
+        KeyCode::Char('k') => app.file_view_half_page_up(),
+        KeyCode::Char('j') => app.file_view_half_page_down(),
+        KeyCode::Char(' ') => app.file_view_toggle(),
+        KeyCode::Enter => app.file_view_toggle_and_advance(),
+        KeyCode::Tab | KeyCode::Esc => app.exit_file_view(),
+        KeyCode::Char('q') => app.should_exit = true,
+        _ => {}
     }
 }
 

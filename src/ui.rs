@@ -7,7 +7,7 @@ use ratatui::widgets::{
     ScrollbarState, Wrap,
 };
 
-use crate::model::{App, VisibleKind};
+use crate::model::{App, FileViewLine, VisibleKind};
 use crate::parser::{FileStatus, HunkLine};
 
 /// Parse "@@ -old_start,count +new_start,count @@" to extract starting line numbers.
@@ -57,7 +57,11 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let header_inner = header_block.inner(main_area);
     frame.render_widget(header_block, main_area);
 
-    draw_main_view(frame, app, header_inner);
+    if app.file_view.is_some() {
+        draw_file_view(frame, app, header_inner);
+    } else {
+        draw_main_view(frame, app, header_inner);
+    }
     draw_status_bar(frame, app, status_area);
 
     if app.show_help {
@@ -765,6 +769,199 @@ fn find_y_offset(segments: &[Segment], target: &SearchTarget, state: &mut FindSt
 struct FindState {
     y: usize,
     line_counter: usize,
+}
+
+fn draw_file_view(frame: &mut Frame, app: &mut App, area: Rect) {
+    let fv = app.file_view.as_mut().unwrap();
+    let file_idx = fv.file_idx;
+    let file = &app.files[file_idx];
+
+    let status_char = match file.status {
+        FileStatus::Modified => "M",
+        FileStatus::Added => "A",
+        FileStatus::Deleted => "D",
+        FileStatus::Renamed => "R",
+        FileStatus::Copied => "C",
+    };
+
+    let title = format!(
+        " {}  {}  +{} -{} ",
+        file.rel_path, status_char, file.additions, file.deletions
+    );
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(title)
+        .title_style(
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )
+        .border_style(Style::default().fg(Color::Cyan));
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let lines = app.file_view_lines(file_idx);
+    let fv = app.file_view.as_mut().unwrap();
+    fv.viewport_height = inner.height;
+
+    let total = lines.len();
+    if total == 0 {
+        return;
+    }
+
+    // Clamp cursor
+    if fv.line_cursor >= total {
+        fv.line_cursor = total.saturating_sub(1);
+    }
+
+    // Compute scroll with margin
+    let cursor = fv.line_cursor;
+    let vh = inner.height as usize;
+    let margin = vh / 4;
+    let mut scroll = fv.scroll_offset;
+
+    if cursor < scroll + margin {
+        scroll = cursor.saturating_sub(margin);
+    }
+    if cursor + margin >= scroll + vh {
+        scroll = (cursor + margin + 1).saturating_sub(vh);
+    }
+    // Clamp
+    let max_scroll = total.saturating_sub(vh);
+    scroll = scroll.min(max_scroll);
+    fv.scroll_offset = scroll;
+
+    let line_cursor = cursor;
+
+    // Render visible lines
+    let end = (scroll + vh).min(total);
+    for (i, line_item) in lines[scroll..end].iter().enumerate() {
+        let abs_idx = scroll + i;
+        let is_cursor = abs_idx == line_cursor;
+        let y = inner.y + i as u16;
+        let line_area = Rect::new(inner.x, y, inner.width, 1);
+
+        let rendered = match line_item {
+            FileViewLine::HunkHeader(hunk_idx) => {
+                let hunk = &app.files[file_idx].hunks[*hunk_idx];
+                let check = if hunk.confirmed { "✓" } else { " " };
+                let marker_color = if is_cursor { Color::Cyan } else { Color::DarkGray };
+
+                Line::from(vec![
+                    Span::styled(HUNK_MARKER_TOP, Style::default().fg(marker_color)),
+                    Span::styled(
+                        format!(" [{}] ", check),
+                        if is_cursor {
+                            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                        } else {
+                            Style::default().fg(Color::White)
+                        },
+                    ),
+                    Span::styled(
+                        format!("+{}", hunk.additions),
+                        Style::default().fg(Color::Green),
+                    ),
+                    Span::raw(" "),
+                    Span::styled(
+                        format!("-{}", hunk.deletions),
+                        Style::default().fg(Color::Red),
+                    ),
+                    Span::styled(
+                        format!("  {}", hunk.header),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                ])
+            }
+            FileViewLine::HunkLine(hunk_idx, line_idx) => {
+                let hunk = &app.files[file_idx].hunks[*hunk_idx];
+                let is_last = *line_idx + 1 == hunk.lines.len();
+
+                let marker = if is_cursor {
+                    "→"
+                } else if is_last {
+                    HUNK_MARKER_BOT
+                } else {
+                    HUNK_MARKER_MID
+                };
+
+                let marker_color = if is_cursor { Color::Cyan } else { Color::DarkGray };
+
+                let (old_start, new_start) = parse_hunk_start(&hunk.header);
+                let mut old_line = old_start;
+                let mut new_line = new_start;
+                for l in &hunk.lines[..*line_idx] {
+                    match l {
+                        HunkLine::Context(_) => { old_line += 1; new_line += 1; }
+                        HunkLine::Addition(_) => { new_line += 1; }
+                        HunkLine::Deletion(_) => { old_line += 1; }
+                    }
+                }
+
+                let hunk_line = &hunk.lines[*line_idx];
+                let (prefix, text, style, line_num_str) = match hunk_line {
+                    HunkLine::Context(s) => (
+                        " ", s.as_str(), Style::default().fg(Color::DarkGray),
+                        format!("{:>4}", old_line),
+                    ),
+                    HunkLine::Addition(s) => (
+                        "+", s.as_str(), Style::default().fg(Color::Green),
+                        format!("{:>4}", new_line),
+                    ),
+                    HunkLine::Deletion(s) => (
+                        "-", s.as_str(), Style::default().fg(Color::Red),
+                        format!("{:>4}", old_line),
+                    ),
+                };
+
+                Line::from(vec![
+                    Span::styled(marker, Style::default().fg(marker_color)),
+                    Span::styled(
+                        format!(" {} ", line_num_str),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                    Span::styled(format!("{} ", prefix), style),
+                    Span::styled(text, style),
+                ])
+            }
+        };
+
+        if is_cursor {
+            // Render with highlight background
+            let bg_style = Style::default().bg(Color::Rgb(40, 40, 50));
+            // Fill background first
+            let bg_line = Line::from(Span::styled(
+                " ".repeat(inner.width as usize),
+                bg_style,
+            ));
+            frame.render_widget(Paragraph::new(bg_line), line_area);
+            // Render the styled content on top with background
+            let highlighted: Line = Line::from(
+                rendered.spans.into_iter().map(|mut span| {
+                    span.style = span.style.bg(Color::Rgb(40, 40, 50));
+                    span
+                }).collect::<Vec<_>>()
+            );
+            frame.render_widget(Paragraph::new(highlighted), line_area);
+        } else {
+            frame.render_widget(Paragraph::new(rendered), line_area);
+        }
+    }
+
+    // Scrollbar
+    if total > vh {
+        let mut scrollbar_state = ScrollbarState::new(total)
+            .position(line_cursor)
+            .viewport_content_length(vh);
+        frame.render_stateful_widget(
+            Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                .thumb_style(Style::default().fg(Color::Cyan))
+                .track_style(Style::default().fg(Color::DarkGray)),
+            inner,
+            &mut scrollbar_state,
+        );
+    }
 }
 
 fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {

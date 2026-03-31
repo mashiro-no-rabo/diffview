@@ -3,6 +3,21 @@ use std::collections::{HashMap, HashSet};
 use crate::fuzzy::{ArinaeMatcher, CaseMatching};
 use crate::parser::FileEntry;
 
+/// State for the single-file view mode.
+pub struct FileViewState {
+    pub file_idx: usize,
+    pub line_cursor: usize,
+    pub scroll_offset: usize,
+    pub viewport_height: u16,
+}
+
+/// An item in the file view's flat line list.
+#[derive(Debug, Clone)]
+pub enum FileViewLine {
+    HunkHeader(usize), // hunk_idx
+    HunkLine(usize, usize), // (hunk_idx, line_idx)
+}
+
 #[derive(Debug, Clone)]
 pub enum VisibleKind {
     Folder(String),
@@ -29,6 +44,7 @@ pub struct App {
     pub show_file_list: bool,
     pub file_list_query: String,
     pub file_list_cursor: usize,
+    pub file_view: Option<FileViewState>,
     matcher: ArinaeMatcher,
 }
 
@@ -118,6 +134,7 @@ impl App {
             show_file_list: false,
             file_list_query: String::new(),
             file_list_cursor: 0,
+            file_view: None,
             matcher: ArinaeMatcher::new(CaseMatching::Smart),
         }
     }
@@ -547,5 +564,110 @@ impl App {
         {
             self.cursor = pos;
         }
+    }
+
+    // ── File View ──
+
+    /// Build flat list of renderable lines for a file in file view.
+    pub fn file_view_lines(&self, file_idx: usize) -> Vec<FileViewLine> {
+        let file = &self.files[file_idx];
+        let mut lines = Vec::new();
+        for (hunk_idx, hunk) in file.hunks.iter().enumerate() {
+            lines.push(FileViewLine::HunkHeader(hunk_idx));
+            if !hunk.confirmed {
+                for (line_idx, _) in hunk.lines.iter().enumerate() {
+                    lines.push(FileViewLine::HunkLine(hunk_idx, line_idx));
+                }
+            }
+        }
+        lines
+    }
+
+    pub fn enter_file_view(&mut self) {
+        let items = self.visible_items();
+        let file_idx = match items.get(self.cursor).map(|i| &i.kind) {
+            Some(VisibleKind::File(idx)) => *idx,
+            Some(VisibleKind::HunkHeader(file_idx, _)) => *file_idx,
+            Some(VisibleKind::HunkLine(file_idx, _, _)) => *file_idx,
+            _ => return,
+        };
+        if self.files[file_idx].hunks.is_empty() {
+            return;
+        }
+        self.file_view = Some(FileViewState {
+            file_idx,
+            line_cursor: 0,
+            scroll_offset: 0,
+            viewport_height: 0,
+        });
+    }
+
+    pub fn exit_file_view(&mut self) {
+        if let Some(fv) = self.file_view.take() {
+            self.jump_to_file(fv.file_idx);
+        }
+    }
+
+    pub fn file_view_up(&mut self) {
+        if let Some(fv) = &mut self.file_view {
+            fv.line_cursor = fv.line_cursor.saturating_sub(1);
+        }
+    }
+
+    pub fn file_view_down(&mut self) {
+        let total = self.file_view.as_ref()
+            .map(|fv| self.file_view_lines(fv.file_idx).len())
+            .unwrap_or(0);
+        if let Some(fv) = &mut self.file_view {
+            if fv.line_cursor + 1 < total {
+                fv.line_cursor += 1;
+            }
+        }
+    }
+
+    pub fn file_view_half_page_up(&mut self) {
+        if let Some(fv) = &mut self.file_view {
+            let half = (fv.viewport_height / 2).max(1) as usize;
+            fv.line_cursor = fv.line_cursor.saturating_sub(half);
+        }
+    }
+
+    pub fn file_view_half_page_down(&mut self) {
+        let (total, half) = self.file_view.as_ref()
+            .map(|fv| {
+                let total = self.file_view_lines(fv.file_idx).len();
+                let half = (fv.viewport_height / 2).max(1) as usize;
+                (total, half)
+            })
+            .unwrap_or((0, 1));
+        if let Some(fv) = &mut self.file_view {
+            fv.line_cursor = (fv.line_cursor + half).min(total.saturating_sub(1));
+        }
+    }
+
+    pub fn file_view_toggle(&mut self) {
+        if let Some(fv) = &self.file_view {
+            let file_idx = fv.file_idx;
+            let lines = self.file_view_lines(file_idx);
+            let hunk_idx = match lines.get(fv.line_cursor) {
+                Some(FileViewLine::HunkHeader(hi)) => *hi,
+                Some(FileViewLine::HunkLine(hi, _)) => *hi,
+                None => return,
+            };
+            self.files[file_idx].hunks[hunk_idx].confirmed =
+                !self.files[file_idx].hunks[hunk_idx].confirmed;
+            // Reclamp cursor since confirmed hunks collapse their lines
+            let total = self.file_view_lines(file_idx).len();
+            if let Some(fv) = &mut self.file_view {
+                if fv.line_cursor >= total {
+                    fv.line_cursor = total.saturating_sub(1);
+                }
+            }
+        }
+    }
+
+    pub fn file_view_toggle_and_advance(&mut self) {
+        self.file_view_toggle();
+        self.file_view_down();
     }
 }

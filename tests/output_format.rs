@@ -657,9 +657,43 @@ fn trace_navigation(app: &mut App, keys: &[&str]) -> String {
             "up" => app.cursor_up(),
             "left" => app.fold_current(),
             "right" => app.unfold_current(),
+            "tab" => app.enter_file_view(),
             _ => {}
         }
         lines.push(format!("{:>5}: {}", key, highlighted_file(app)));
+    }
+    lines.join("\n")
+}
+
+fn file_view_cursor_info(app: &App) -> String {
+    match &app.file_view {
+        Some(fv) => {
+            let lines = app.file_view_lines(fv.file_idx);
+            let item = lines.get(fv.line_cursor).map(|l| match l {
+                model::FileViewLine::HunkHeader(hi) => format!("hunk_header({})", hi),
+                model::FileViewLine::HunkLine(hi, li) => format!("hunk_line({},{})", hi, li),
+            }).unwrap_or_else(|| "none".into());
+            format!("cursor={} item={}", fv.line_cursor, item)
+        }
+        None => "not in file view".into(),
+    }
+}
+
+fn trace_file_view_nav(app: &mut App, keys: &[&str]) -> String {
+    let mut lines = Vec::new();
+    lines.push(format!("start: {}", file_view_cursor_info(app)));
+    for &key in keys {
+        match key {
+            "up" => app.file_view_up(),
+            "down" => app.file_view_down(),
+            "j" => app.file_view_half_page_down(),
+            "k" => app.file_view_half_page_up(),
+            "space" => app.file_view_toggle(),
+            "enter" => app.file_view_toggle_and_advance(),
+            "tab" | "esc" => app.exit_file_view(),
+            _ => {}
+        }
+        lines.push(format!("{:>5}: {}", key, file_view_cursor_info(app)));
     }
     lines.join("\n")
 }
@@ -849,4 +883,153 @@ fn down_walks_all_targets() {
     // down visits folders, files, and hunk headers in order
     let keys: Vec<&str> = (0..20).map(|_| "down").collect();
     insta::assert_snapshot!(trace_navigation(&mut app, &keys));
+}
+
+// ── File View mode ──
+
+#[test]
+fn file_view_render_at_top() {
+    let mut app = App::new(parse_diff(NAV_DIFF));
+    app.next_file(); // go to processor.rs
+    app.enter_file_view();
+    insta::assert_snapshot!(render_app(&mut app, 60, 20));
+}
+
+#[test]
+fn file_view_render_cursor_on_line() {
+    let mut app = App::new(parse_diff(NAV_DIFF));
+    app.next_file();
+    app.enter_file_view();
+    app.file_view_down(); // move to first hunk line
+    app.file_view_down();
+    insta::assert_snapshot!(render_app(&mut app, 60, 20));
+}
+
+#[test]
+fn file_view_render_multi_hunk() {
+    let mut app = App::new(parse_diff(MIXED_TYPES_DIFF));
+    // main.rs has 2 hunks
+    app.next_file();
+    app.enter_file_view();
+    insta::assert_snapshot!(render_app(&mut app, 60, 20));
+}
+
+#[test]
+fn file_view_up_down_navigation() {
+    let mut app = App::new(parse_diff(NAV_DIFF));
+    app.next_file();
+    app.enter_file_view();
+    // Set viewport height so half-page works
+    if let Some(fv) = &mut app.file_view {
+        fv.viewport_height = 20;
+    }
+    insta::assert_snapshot!(trace_file_view_nav(
+        &mut app,
+        &["down", "down", "down", "up", "up"]
+    ));
+}
+
+#[test]
+fn file_view_half_page_navigation() {
+    let mut app = App::new(parse_diff(MIXED_TYPES_DIFF));
+    app.next_file(); // main.rs with 2 hunks
+    app.enter_file_view();
+    if let Some(fv) = &mut app.file_view {
+        fv.viewport_height = 10;
+    }
+    insta::assert_snapshot!(trace_file_view_nav(
+        &mut app,
+        &["j", "j", "k"]
+    ));
+}
+
+#[test]
+fn file_view_toggle_hunk() {
+    let mut app = App::new(parse_diff(NAV_DIFF));
+    app.next_file();
+    app.enter_file_view();
+    // Toggle the hunk (cursor starts on hunk header)
+    app.file_view_toggle();
+    assert!(app.files[0].hunks[0].confirmed);
+    // Toggle again to unconfirm
+    app.file_view_toggle();
+    assert!(!app.files[0].hunks[0].confirmed);
+}
+
+#[test]
+fn file_view_toggle_from_line() {
+    let mut app = App::new(parse_diff(NAV_DIFF));
+    app.next_file();
+    app.enter_file_view();
+    app.file_view_down(); // move to a hunk line
+    app.file_view_toggle(); // should toggle the parent hunk
+    assert!(app.files[0].hunks[0].confirmed);
+}
+
+#[test]
+fn file_view_exit_returns_to_file() {
+    let mut app = App::new(parse_diff(NAV_DIFF));
+    app.next_file(); // processor.rs
+    app.next_file(); // login.rs
+    app.enter_file_view();
+    assert!(app.file_view.is_some());
+    app.exit_file_view();
+    assert!(app.file_view.is_none());
+    // Cursor should be on the file we viewed
+    assert_eq!(highlighted_file(&app), "app/plugins/auth/login.rs");
+}
+
+#[test]
+fn file_view_render_after_toggle() {
+    let mut app = App::new(parse_diff(MIXED_TYPES_DIFF));
+    app.next_file(); // main.rs
+    app.enter_file_view();
+    app.file_view_toggle(); // confirm first hunk — lines collapse
+    insta::assert_snapshot!(render_app(&mut app, 60, 20));
+}
+
+#[test]
+fn file_view_no_enter_on_binary() {
+    let diff = "\
+diff --git a/image.png b/image.png
+index abc..def 100644
+Binary files a/image.png and b/image.png differ
+";
+    let mut app = App::new(parse_diff(diff));
+    app.enter_file_view();
+    assert!(app.file_view.is_none(), "should not enter file view for binary file");
+}
+
+#[test]
+fn file_view_no_enter_on_folder() {
+    let mut app = App::new(parse_diff(NAV_DIFF));
+    // Cursor starts on folder
+    app.enter_file_view();
+    assert!(app.file_view.is_none(), "should not enter file view from folder");
+}
+
+#[test]
+fn file_view_enter_from_hunk_header() {
+    let mut app = App::new(parse_diff(NAV_DIFF));
+    app.next_file();
+    app.cursor_down(); // move to hunk header
+    app.enter_file_view();
+    assert!(app.file_view.is_some(), "should enter file view from hunk header");
+    assert_eq!(app.file_view.as_ref().unwrap().file_idx, 0);
+}
+
+#[test]
+fn file_view_cursor_clamps_at_bounds() {
+    let mut app = App::new(parse_diff(NAV_DIFF));
+    app.next_file();
+    app.enter_file_view();
+    // Up at top should stay at 0
+    app.file_view_up();
+    assert_eq!(app.file_view.as_ref().unwrap().line_cursor, 0);
+    // Navigate to bottom
+    let total = app.file_view_lines(0).len();
+    for _ in 0..total + 5 {
+        app.file_view_down();
+    }
+    assert_eq!(app.file_view.as_ref().unwrap().line_cursor, total - 1);
 }

@@ -1,0 +1,10 @@
+---
+source: tests/output_format.rs
+expression: "trace_file_view_nav(&mut app, &[\"down\", \"down\", \"down\", \"up\", \"up\"])"
+---
+start: cursor=0 item=hunk_header(0)
+ down: cursor=1 item=hunk_line(0,0)
+ down: cursor=2 item=hunk_line(0,1)
+ down: cursor=3 item=hunk_line(0,2)
+   up: cursor=2 item=hunk_line(0,1)
+   up: cursor=1 item=hunk_line(0,0)
