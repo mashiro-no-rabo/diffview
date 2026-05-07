@@ -42,25 +42,10 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let main_area = chunks[0];
     let status_area = chunks[1];
 
-    let confirmed = app.total_confirmed_hunks();
-    let total = app.total_hunks();
-    let header_title = format!(" Diffview  {}/{} confirmed ", confirmed, total);
-    let header_block = Block::default()
-        .borders(Borders::ALL)
-        .title(header_title)
-        .title_style(
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        )
-        .border_style(Style::default().fg(Color::Cyan));
-    let header_inner = header_block.inner(main_area);
-    frame.render_widget(header_block, main_area);
-
     if app.file_view.is_some() {
-        draw_file_view(frame, app, header_inner);
+        draw_file_view(frame, app, main_area);
     } else {
-        draw_main_view(frame, app, header_inner);
+        draw_main_view(frame, app, main_area);
     }
     draw_status_bar(frame, app, status_area);
 
@@ -995,24 +980,13 @@ fn draw_file_view(frame: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
-    let confirmed = app.total_confirmed_hunks();
-    let total = app.total_hunks();
+    let confirmed_files = app.files.iter().filter(|f| f.all_confirmed()).count();
+    let total_files = app.files.len();
 
-    let status = Line::from(vec![
-        Span::styled(" ?", Style::default().fg(Color::Yellow)),
-        Span::raw(":help "),
-        Span::styled("Space", Style::default().fg(Color::Yellow)),
-        Span::raw(":confirm "),
-        Span::styled("Enter", Style::default().fg(Color::Yellow)),
-        Span::raw(":confirm+next "),
-        Span::styled("f", Style::default().fg(Color::Yellow)),
-        Span::raw(":files "),
-        Span::styled("←→", Style::default().fg(Color::Yellow)),
-        Span::raw(":fold "),
-        Span::styled("q", Style::default().fg(Color::Yellow)),
-        Span::raw(":quit "),
-        Span::raw(format!(" {}/{} confirmed", confirmed, total)),
-    ]);
+    let status = Line::from(Span::raw(format!(
+        " {}/{} files confirmed",
+        confirmed_files, total_files
+    )));
 
     frame.render_widget(Paragraph::new(status), area);
 }

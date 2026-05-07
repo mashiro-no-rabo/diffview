@@ -77,6 +77,7 @@ impl FileEntry {
         self.hunks.iter().all(|h| h.confirmed)
     }
 
+    #[allow(dead_code)]
     pub fn confirmed_count(&self) -> usize {
         if self.hunks.is_empty() {
             return if self.confirmed { 1 } else { 0 };

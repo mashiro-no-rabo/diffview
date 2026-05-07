@@ -7,7 +7,10 @@ use std::io::{self, Read};
 use std::process;
 
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::event::{
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
+    MouseEventKind,
+};
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
@@ -47,7 +50,7 @@ fn run() -> Result<()> {
     // Terminal setup
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    crossterm::execute!(stdout, EnterAlternateScreen)?;
+    crossterm::execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -55,7 +58,7 @@ fn run() -> Result<()> {
 
     // Terminal teardown
     disable_raw_mode()?;
-    crossterm::execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    crossterm::execute!(terminal.backend_mut(), DisableMouseCapture, LeaveAlternateScreen)?;
     terminal.show_cursor()?;
 
     result
@@ -73,6 +76,30 @@ fn event_loop(
         }
 
         let ev = event::read()?;
+
+        if let Event::Mouse(mouse) = ev {
+            if app.show_help || app.show_file_list {
+                continue;
+            }
+            match mouse.kind {
+                MouseEventKind::ScrollUp => {
+                    if app.file_view.is_some() {
+                        app.file_view_up();
+                    } else {
+                        app.cursor_up_no_wrap();
+                    }
+                }
+                MouseEventKind::ScrollDown => {
+                    if app.file_view.is_some() {
+                        app.file_view_down();
+                    } else {
+                        app.cursor_down_no_wrap();
+                    }
+                }
+                _ => {}
+            }
+            continue;
+        }
 
         if let Event::Key(key) = ev {
             if key.kind != KeyEventKind::Press {

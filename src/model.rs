@@ -232,14 +232,6 @@ impl App {
         !indices.is_empty() && indices.iter().all(|&i| self.files[i].all_confirmed())
     }
 
-    pub fn total_confirmed_hunks(&self) -> usize {
-        self.files.iter().map(|f| f.confirmed_count()).sum()
-    }
-
-    pub fn total_hunks(&self) -> usize {
-        self.files.iter().map(|f| f.total_units()).sum()
-    }
-
     // ── Navigation ──
 
     /// Clamp cursor to valid target after state changes.
@@ -289,6 +281,38 @@ impl App {
             current_target_idx + 1
         };
         self.cursor = targets[new_idx];
+    }
+
+    pub fn cursor_up_no_wrap(&mut self) {
+        let targets = self.cursor_targets();
+        if targets.is_empty() {
+            return;
+        }
+        let current_target_idx = targets
+            .iter()
+            .rposition(|&t| t <= self.cursor)
+            .unwrap_or(0);
+        if current_target_idx > 0 {
+            self.cursor = targets[current_target_idx - 1];
+        } else {
+            self.cursor = targets[0];
+        }
+    }
+
+    pub fn cursor_down_no_wrap(&mut self) {
+        let targets = self.cursor_targets();
+        if targets.is_empty() {
+            return;
+        }
+        let current_target_idx = targets
+            .iter()
+            .position(|&t| t >= self.cursor)
+            .unwrap_or(targets.len() - 1);
+        if current_target_idx + 1 < targets.len() {
+            self.cursor = targets[current_target_idx + 1];
+        } else {
+            self.cursor = *targets.last().unwrap();
+        }
     }
 
     /// Jump to previous file header.
