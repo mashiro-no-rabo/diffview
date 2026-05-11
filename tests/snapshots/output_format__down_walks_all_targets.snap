@@ -12,14 +12,14 @@ start: app/core/engine/processor.rs
  down: [hunk app/plugins/network/client.rs.0]
  down: app/plugins/logging/output.rs
  down: [hunk app/plugins/logging/output.rs.0]
- down: app/core/engine/processor.rs
- down: [hunk app/core/engine/processor.rs.0]
- down: app/plugins/auth/login.rs
- down: [hunk app/plugins/auth/login.rs.0]
- down: app/plugins/storage/cache.rs
- down: [hunk app/plugins/storage/cache.rs.0]
- down: app/plugins/network/client.rs
- down: [hunk app/plugins/network/client.rs.0]
- down: app/plugins/logging/output.rs
  down: [hunk app/plugins/logging/output.rs.0]
- down: app/core/engine/processor.rs
+ down: [hunk app/plugins/logging/output.rs.0]
+ down: [hunk app/plugins/logging/output.rs.0]
+ down: [hunk app/plugins/logging/output.rs.0]
+ down: [hunk app/plugins/logging/output.rs.0]
+ down: [hunk app/plugins/logging/output.rs.0]
+ down: [hunk app/plugins/logging/output.rs.0]
+ down: [hunk app/plugins/logging/output.rs.0]
+ down: [hunk app/plugins/logging/output.rs.0]
+ down: [hunk app/plugins/logging/output.rs.0]
+ down: [hunk app/plugins/logging/output.rs.0]

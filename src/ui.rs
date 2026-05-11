@@ -539,6 +539,8 @@ fn render_segments(
 }
 
 fn draw_main_view(frame: &mut Frame, app: &mut App, area: Rect) {
+    app.viewport_height = area.height;
+
     let visible = app.visible_items();
     if visible.is_empty() {
         let msg = Paragraph::new("  All hunks confirmed! Press q to exit.");
@@ -561,27 +563,27 @@ fn draw_main_view(frame: &mut Frame, app: &mut App, area: Rect) {
         _ => None,
     });
 
-    let segments = build_segment_tree(app, cursor);
-    let total_height: u16 = segments.iter().map(|s| segment_height(s)).sum();
+    let total_height: u16;
+    let scroll: u16;
+    {
+        let segments = build_segment_tree(app, cursor);
+        total_height = segments.iter().map(|s| segment_height(s)).sum();
+        let max_scroll = total_height.saturating_sub(area.height) as usize;
+        let clamped = app.scroll_offset.min(max_scroll);
+        scroll = clamped as u16;
 
-    let scroll = compute_scroll_nested(
-        cursor,
-        &visible,
-        &segments,
-        area.height,
-        app.scroll_offset as u16,
-    );
-
-    let mut scroll_remaining = scroll;
-    render_segments(
-        frame,
-        area,
-        &segments,
-        app,
-        &mut scroll_remaining,
-        focused_folder.as_deref(),
-        focused_file,
-    );
+        let mut scroll_remaining = scroll;
+        render_segments(
+            frame,
+            area,
+            &segments,
+            app,
+            &mut scroll_remaining,
+            focused_folder.as_deref(),
+            focused_file,
+        );
+    }
+    app.scroll_offset = scroll as usize;
 
     // Scrollbar — evenly divided by hunk/unit count
     let total_units: usize = app.files.iter().map(|f| f.total_units()).sum();
@@ -598,8 +600,6 @@ fn draw_main_view(frame: &mut Frame, app: &mut App, area: Rect) {
             &mut scrollbar_state,
         );
     }
-
-    app.scroll_offset = scroll as usize;
 }
 
 /// Map cursor position to a sequential hunk/unit index for the scrollbar.
@@ -636,154 +636,6 @@ fn cursor_unit_position(
         }
         VisibleKind::HunkLine(file_idx, hunk_idx, _) => file_unit_offset(*file_idx) + hunk_idx,
     }
-}
-
-fn compute_scroll_nested(
-    cursor: usize,
-    visible: &[crate::model::VisibleItem],
-    segments: &[Segment],
-    visible_height: u16,
-    current_scroll: u16,
-) -> u16 {
-    // Find which entry index corresponds to the cursor position
-    // Entries skip Folder and File items (they're blocks, not lines).
-    // But we need to account for folder/file block borders in the y offset.
-    // Use a different approach: walk the segment tree and find which segment
-    // contains the cursor's visible item.
-
-    let cursor_kind = visible.get(cursor).map(|vi| &vi.kind);
-
-    let search = match cursor_kind {
-        Some(VisibleKind::Folder(path)) => Some(SearchTarget::Folder(path)),
-        Some(VisibleKind::File(idx)) => Some(SearchTarget::File(*idx)),
-        Some(VisibleKind::HunkHeader(_, _) | VisibleKind::HunkLine(_, _, _)) => {
-            let mut entry_idx = 0;
-            let mut target = None;
-            for (vis_idx, vi) in visible.iter().enumerate() {
-                if matches!(vi.kind, VisibleKind::Folder(_) | VisibleKind::File(_)) {
-                    continue;
-                }
-                if vis_idx == cursor {
-                    target = Some(entry_idx);
-                    break;
-                }
-                entry_idx += 1;
-            }
-            target.map(SearchTarget::Line)
-        }
-        None => None,
-    };
-
-    let offset = search.and_then(|s| {
-        let mut state = FindState { y: 0, line_counter: 0 };
-        find_y_offset(segments, &s, &mut state)
-    });
-
-    let offset = offset.unwrap_or(0) as u16;
-
-    // For files and hunks: anchor scroll to parent folder so siblings are out of view.
-    if matches!(
-        cursor_kind,
-        Some(
-            VisibleKind::File(_)
-                | VisibleKind::HunkHeader(_, _)
-                | VisibleKind::HunkLine(_, _, _)
-        )
-    ) {
-        let parent_y = parent_folder_y(cursor, visible, segments);
-        if offset >= parent_y && offset - parent_y < visible_height {
-            // Parent folder and cursor both fit — anchor at parent
-            return parent_y;
-        }
-        // Cursor too far from parent folder — center on cursor
-        return offset.saturating_sub(visible_height / 2);
-    }
-
-    // For folders: use margin-based approach
-    let margin = visible_height / 4;
-
-    if offset < current_scroll + margin {
-        return offset.saturating_sub(margin);
-    }
-
-    if offset + margin >= current_scroll + visible_height {
-        return offset.saturating_sub(visible_height / 2);
-    }
-
-    current_scroll
-}
-
-/// Walk backwards from cursor to find the nearest parent folder's y offset.
-fn parent_folder_y(
-    cursor: usize,
-    visible: &[crate::model::VisibleItem],
-    segments: &[Segment],
-) -> u16 {
-    for i in (0..cursor).rev() {
-        if let VisibleKind::Folder(path) = &visible[i].kind {
-            let mut state = FindState {
-                y: 0,
-                line_counter: 0,
-            };
-            if let Some(y) = find_y_offset(segments, &SearchTarget::Folder(path), &mut state) {
-                return y as u16;
-            }
-        }
-    }
-    0
-}
-
-enum SearchTarget<'a> {
-    Folder(&'a str),
-    File(usize),
-    Line(usize), // nth content line
-}
-
-/// Find y offset of a target within the segment tree.
-fn find_y_offset(segments: &[Segment], target: &SearchTarget, state: &mut FindState) -> Option<usize> {
-    for seg in segments {
-        match seg {
-            Segment::Line(_) => {
-                if let SearchTarget::Line(n) = target {
-                    if state.line_counter == *n {
-                        return Some(state.y);
-                    }
-                    state.line_counter += 1;
-                }
-                state.y += 1;
-            }
-            Segment::Folder { full_path, children, .. } => {
-                if let SearchTarget::Folder(p) = target
-                    && full_path.as_str() == *p
-                {
-                    return Some(state.y);
-                }
-                state.y += 1; // top border
-                if let Some(r) = find_y_offset(children, target, state) {
-                    return Some(r);
-                }
-                state.y += 1; // bottom border
-            }
-            Segment::File { file_idx, children, .. } => {
-                if let SearchTarget::File(idx) = target
-                    && *file_idx == *idx
-                {
-                    return Some(state.y);
-                }
-                state.y += 1; // top border
-                if let Some(r) = find_y_offset(children, target, state) {
-                    return Some(r);
-                }
-                state.y += 1; // bottom border
-            }
-        }
-    }
-    None
-}
-
-struct FindState {
-    y: usize,
-    line_counter: usize,
 }
 
 fn draw_file_view(frame: &mut Frame, app: &mut App, area: Rect) {
@@ -1009,19 +861,19 @@ fn draw_help_dialog(frame: &mut Frame) {
         Line::raw(""),
         Line::from(vec![
             Span::styled("  ↑/↓        ", Style::default().fg(Color::Yellow)),
-            Span::raw("Navigate items"),
+            Span::raw("Move cursor / scroll if off-screen"),
         ]),
         Line::from(vec![
-            Span::styled("  j/k, n/p   ", Style::default().fg(Color::Yellow)),
+            Span::styled("  Wheel      ", Style::default().fg(Color::Yellow)),
+            Span::raw("Scroll viewport one line"),
+        ]),
+        Line::from(vec![
+            Span::styled("  j/k        ", Style::default().fg(Color::Yellow)),
             Span::raw("Jump to next/prev file"),
         ]),
         Line::from(vec![
-            Span::styled("  ←          ", Style::default().fg(Color::Yellow)),
-            Span::raw("Fold folder/file"),
-        ]),
-        Line::from(vec![
-            Span::styled("  →          ", Style::default().fg(Color::Yellow)),
-            Span::raw("Unfold folder/file"),
+            Span::styled("  ←/→        ", Style::default().fg(Color::Yellow)),
+            Span::raw("Fold/unfold current file"),
         ]),
         Line::from(vec![
             Span::styled("  Space      ", Style::default().fg(Color::Yellow)),
@@ -1034,6 +886,10 @@ fn draw_help_dialog(frame: &mut Frame) {
         Line::from(vec![
             Span::styled("  a          ", Style::default().fg(Color::Yellow)),
             Span::raw("Invert confirmation"),
+        ]),
+        Line::from(vec![
+            Span::styled("  Tab        ", Style::default().fg(Color::Yellow)),
+            Span::raw("Enter file view"),
         ]),
         Line::from(vec![
             Span::styled("  f          ", Style::default().fg(Color::Yellow)),

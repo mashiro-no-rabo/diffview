@@ -696,6 +696,7 @@ fn render_scrollbar_at_top() {
 #[test]
 fn render_scrollbar_at_bottom() {
     let mut app = App::new(parse_diff(NAV_DIFF));
+    app.viewport_height = 20; // matches render_app height
     // Navigate to last file's hunk
     app.next_file(); // 2nd file
     app.next_file(); // 3rd file

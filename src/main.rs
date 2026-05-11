@@ -86,14 +86,14 @@ fn event_loop(
                     if app.file_view.is_some() {
                         app.file_view_up();
                     } else {
-                        app.cursor_up_no_wrap();
+                        app.scroll_line_up();
                     }
                 }
                 MouseEventKind::ScrollDown => {
                     if app.file_view.is_some() {
                         app.file_view_down();
                     } else {
-                        app.cursor_down_no_wrap();
+                        app.scroll_line_down();
                     }
                 }
                 _ => {}
@@ -152,8 +152,8 @@ fn event_loop(
                 KeyCode::Down => app.cursor_down(),
                 KeyCode::Up => app.cursor_up(),
 
-                KeyCode::Char('j') | KeyCode::Char('n') => app.next_file(),
-                KeyCode::Char('k') | KeyCode::Char('p') => app.prev_file(),
+                KeyCode::Char('j') => app.next_file(),
+                KeyCode::Char('k') => app.prev_file(),
 
                 KeyCode::Char(' ') => app.confirm_and_advance(),
                 KeyCode::Char('a') => app.invert_confirmation(),

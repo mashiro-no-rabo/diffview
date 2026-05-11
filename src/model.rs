@@ -39,6 +39,7 @@ pub struct App {
     pub folded_files: HashSet<usize>,       // folded file indices (hunks hidden)
     pub cursor: usize,
     pub scroll_offset: usize,
+    pub viewport_height: u16, // set by renderer each frame
     pub should_exit: bool,
     pub show_help: bool,
     pub show_file_list: bool,
@@ -75,6 +76,7 @@ impl App {
             folded_files,
             cursor: 0,
             scroll_offset: 0,
+            viewport_height: 0,
             should_exit: false,
             show_help: false,
             show_file_list: false,
@@ -178,6 +180,67 @@ impl App {
         !indices.is_empty() && indices.iter().all(|&i| self.files[i].all_confirmed())
     }
 
+    // ── Rendered geometry ──
+
+    /// Y-row of each visible item in the rendered output. Mirrors the
+    /// segment-rendering rules in ui.rs: each file contributes a top-border
+    /// row (the file row itself), an optional info line for binary / mode-only
+    /// files, and a bottom-border row after its children.
+    pub fn item_y_positions(&self) -> Vec<u16> {
+        let items = self.visible_items();
+        let mut ys = Vec::with_capacity(items.len());
+        let mut y: u16 = 0;
+        let mut last_was_file = false;
+
+        for item in &items {
+            match &item.kind {
+                VisibleKind::File(idx) => {
+                    if last_was_file {
+                        y = y.saturating_add(1); // previous file's bottom border
+                    }
+                    ys.push(y);
+                    y = y.saturating_add(1); // top border (= file row)
+                    let file = &self.files[*idx];
+                    if file.hunks.is_empty()
+                        && !self.folded_files.contains(idx)
+                        && !file.all_confirmed()
+                    {
+                        y = y.saturating_add(1); // info line
+                    }
+                    last_was_file = true;
+                }
+                VisibleKind::HunkHeader(_, _) | VisibleKind::HunkLine(_, _, _) => {
+                    ys.push(y);
+                    y = y.saturating_add(1);
+                }
+                VisibleKind::Folder(_) => {
+                    if last_was_file {
+                        y = y.saturating_add(1);
+                    }
+                    ys.push(y);
+                    y = y.saturating_add(1);
+                    last_was_file = false;
+                }
+            }
+        }
+
+        ys
+    }
+
+    /// Total height of the rendered main view in lines.
+    pub fn total_rendered_height(&self) -> u16 {
+        let ys = self.item_y_positions();
+        match ys.last() {
+            Some(&last) => last.saturating_add(2), // last item's row + closing bottom border
+            None => 0,
+        }
+    }
+
+    fn max_scroll(&self) -> usize {
+        self.total_rendered_height()
+            .saturating_sub(self.viewport_height) as usize
+    }
+
     // ── Navigation ──
 
     /// Clamp cursor to valid target after state changes.
@@ -195,69 +258,124 @@ impl App {
         }
     }
 
+    /// Adjust scroll_offset so the cursor sits within the viewport.
+    pub fn ensure_cursor_visible(&mut self) {
+        if self.viewport_height == 0 {
+            return;
+        }
+        let ys = self.item_y_positions();
+        let Some(&cursor_y) = ys.get(self.cursor) else {
+            return;
+        };
+        let scroll = self.scroll_offset as u16;
+        let vh = self.viewport_height;
+        let margin = vh / 4;
+
+        if cursor_y < scroll + margin {
+            self.scroll_offset = cursor_y.saturating_sub(margin) as usize;
+        } else if cursor_y + margin >= scroll + vh {
+            self.scroll_offset = (cursor_y + margin + 1).saturating_sub(vh) as usize;
+        }
+        let max = self.max_scroll();
+        if self.scroll_offset > max {
+            self.scroll_offset = max;
+        }
+    }
+
+    /// Up arrow: if previous cursor target is visible, move cursor to it;
+    /// otherwise scroll the viewport up by a half-page (cursor unchanged).
     pub fn cursor_up(&mut self) {
         let targets = self.cursor_targets();
         if targets.is_empty() {
             return;
         }
-        let current_target_idx = targets
-            .iter()
-            .rposition(|&t| t <= self.cursor)
-            .unwrap_or(targets.len() - 1);
-        let new_idx = if current_target_idx == 0 {
-            targets.len() - 1
-        } else {
-            current_target_idx - 1
+        if self.viewport_height == 0 {
+            // Pre-render fallback: walk targets without wrap-around.
+            let idx = targets
+                .iter()
+                .rposition(|&t| t <= self.cursor)
+                .unwrap_or(0);
+            if idx > 0 {
+                self.cursor = targets[idx - 1];
+            }
+            return;
+        }
+
+        let ys = self.item_y_positions();
+        let cursor_idx = targets.iter().position(|&t| t == self.cursor);
+        let prev_idx = match cursor_idx {
+            Some(i) if i > 0 => Some(i - 1),
+            None => None, // cursor not on a target — recover via clamp on next op
+            Some(_) => None,
         };
-        self.cursor = targets[new_idx];
+
+        if let Some(pi) = prev_idx {
+            let prev_target = targets[pi];
+            let prev_y = ys[prev_target];
+            let scroll = self.scroll_offset as u16;
+            if prev_y >= scroll && prev_y < scroll + self.viewport_height {
+                self.cursor = prev_target;
+                return;
+            }
+        }
+
+        let step = (self.viewport_height / 2).max(1) as usize;
+        self.scroll_offset = self.scroll_offset.saturating_sub(step);
     }
 
+    /// Down arrow: if next cursor target is visible, move cursor to it;
+    /// otherwise scroll the viewport down by a half-page (cursor unchanged).
     pub fn cursor_down(&mut self) {
         let targets = self.cursor_targets();
         if targets.is_empty() {
             return;
         }
-        let current_target_idx = targets
-            .iter()
-            .position(|&t| t >= self.cursor)
-            .unwrap_or(0);
-        let new_idx = if current_target_idx + 1 >= targets.len() {
-            0
-        } else {
-            current_target_idx + 1
+        if self.viewport_height == 0 {
+            let idx = targets
+                .iter()
+                .position(|&t| t >= self.cursor)
+                .unwrap_or(targets.len() - 1);
+            if idx + 1 < targets.len() {
+                self.cursor = targets[idx + 1];
+            }
+            return;
+        }
+
+        let ys = self.item_y_positions();
+        let cursor_idx = targets.iter().position(|&t| t == self.cursor);
+        let next_idx = match cursor_idx {
+            Some(i) if i + 1 < targets.len() => Some(i + 1),
+            _ => None,
         };
-        self.cursor = targets[new_idx];
+
+        if let Some(ni) = next_idx {
+            let next_target = targets[ni];
+            let next_y = ys[next_target];
+            let scroll = self.scroll_offset as u16;
+            if next_y >= scroll && next_y < scroll + self.viewport_height {
+                self.cursor = next_target;
+                return;
+            }
+        }
+
+        let step = (self.viewport_height / 2).max(1) as usize;
+        let max = self.max_scroll();
+        self.scroll_offset = (self.scroll_offset + step).min(max);
     }
 
-    pub fn cursor_up_no_wrap(&mut self) {
-        let targets = self.cursor_targets();
-        if targets.is_empty() {
-            return;
-        }
-        let current_target_idx = targets
-            .iter()
-            .rposition(|&t| t <= self.cursor)
-            .unwrap_or(0);
-        if current_target_idx > 0 {
-            self.cursor = targets[current_target_idx - 1];
-        } else {
-            self.cursor = targets[0];
-        }
+    /// Mouse wheel: scroll one line up. Cursor unchanged.
+    pub fn scroll_line_up(&mut self) {
+        self.scroll_offset = self.scroll_offset.saturating_sub(1);
     }
 
-    pub fn cursor_down_no_wrap(&mut self) {
-        let targets = self.cursor_targets();
-        if targets.is_empty() {
+    /// Mouse wheel: scroll one line down. Cursor unchanged.
+    pub fn scroll_line_down(&mut self) {
+        if self.viewport_height == 0 {
             return;
         }
-        let current_target_idx = targets
-            .iter()
-            .position(|&t| t >= self.cursor)
-            .unwrap_or(targets.len() - 1);
-        if current_target_idx + 1 < targets.len() {
-            self.cursor = targets[current_target_idx + 1];
-        } else {
-            self.cursor = *targets.last().unwrap();
+        let max = self.max_scroll();
+        if self.scroll_offset < max {
+            self.scroll_offset += 1;
         }
     }
 
@@ -278,6 +396,7 @@ impl App {
             .rposition(|&p| p < self.cursor)
             .unwrap_or(file_positions.len() - 1);
         self.cursor = file_positions[current];
+        self.ensure_cursor_visible();
     }
 
     /// Jump to next file header.
@@ -297,6 +416,7 @@ impl App {
             .position(|&p| p > self.cursor)
             .unwrap_or(0);
         self.cursor = file_positions[current];
+        self.ensure_cursor_visible();
     }
 
     /// Find the innermost merged folder for a given file.
@@ -361,6 +481,7 @@ impl App {
             }
             _ => {}
         }
+        self.ensure_cursor_visible();
     }
 
     pub fn unfold_current(&mut self) {
@@ -391,6 +512,7 @@ impl App {
             }
             _ => {}
         }
+        self.ensure_cursor_visible();
     }
 
     // ── Selection/Confirmation ──
@@ -440,6 +562,7 @@ impl App {
             _ => {}
         }
         self.clamp_cursor();
+        self.ensure_cursor_visible();
     }
 
     pub fn confirm_and_advance(&mut self) {
@@ -490,6 +613,7 @@ impl App {
         } else {
             self.clamp_cursor();
         }
+        self.ensure_cursor_visible();
     }
 
     // ── File list popup ──
@@ -534,6 +658,7 @@ impl App {
         {
             self.cursor = pos;
         }
+        self.ensure_cursor_visible();
     }
 
     // ── File View ──
