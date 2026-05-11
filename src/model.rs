@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use crate::fuzzy::{ArinaeMatcher, CaseMatching};
 use crate::parser::FileEntry;
@@ -48,63 +48,9 @@ pub struct App {
     matcher: ArinaeMatcher,
 }
 
-/// Precompute merged folder stacks: single-child folder chains are collapsed
-/// so navigation skips through them in one step.
+/// Folder grouping is disabled — the default view is a flat file list.
 fn compute_merged_folder_stacks(files: &[FileEntry]) -> Vec<Vec<String>> {
-    struct Node {
-        children: HashMap<String, Node>,
-        has_files: bool,
-    }
-
-    let mut root = Node {
-        children: HashMap::new(),
-        has_files: false,
-    };
-
-    for file in files {
-        let parts: Vec<&str> = file.rel_path.split('/').collect();
-        let mut node = &mut root;
-        for &part in &parts[..parts.len().saturating_sub(1)] {
-            node = node
-                .children
-                .entry(part.to_string())
-                .or_insert_with(|| Node {
-                    children: HashMap::new(),
-                    has_files: false,
-                });
-        }
-        node.has_files = true;
-    }
-
-    files
-        .iter()
-        .map(|file| {
-            let parts: Vec<&str> = file.rel_path.split('/').collect();
-            let folder_parts = &parts[..parts.len().saturating_sub(1)];
-
-            let mut stack = Vec::new();
-            let mut node = &root;
-            let mut accumulated = String::new();
-
-            for &part in folder_parts {
-                if !accumulated.is_empty() {
-                    accumulated.push('/');
-                }
-                accumulated.push_str(part);
-
-                let child = &node.children[part];
-
-                // Emit unless this folder has exactly one subfolder child and no direct files
-                if child.children.len() != 1 || child.has_files {
-                    stack.push(accumulated.clone());
-                }
-
-                node = child;
-            }
-
-            stack
-        })
-        .collect()
+    files.iter().map(|_| Vec::new()).collect()
 }
 
 impl App {
@@ -701,7 +647,7 @@ mod tests {
     use super::*;
     use crate::parser::parse_diff;
 
-    const FOLD_TEST_DIFF: &str = "\
+    const FLAT_TEST_DIFF: &str = "\
 diff --git a/zoo/mammals/cat.txt b/zoo/mammals/cat.txt
 --- a/zoo/mammals/cat.txt
 +++ b/zoo/mammals/cat.txt
@@ -729,72 +675,26 @@ diff --git a/zoo/birds/parrot.txt b/zoo/birds/parrot.txt
 ";
 
     #[test]
-    fn fold_folder_hides_everything_underneath() {
-        let mut app = App::new(parse_diff(FOLD_TEST_DIFF));
-
+    fn default_view_emits_no_folders() {
+        let app = App::new(parse_diff(FLAT_TEST_DIFF));
         let items = app.visible_items();
-        let zoo_pos = items
+        let folders = items
             .iter()
-            .position(|i| matches!(&i.kind, VisibleKind::Folder(p) if p == "zoo"))
-            .expect("zoo folder must exist");
+            .filter(|i| matches!(i.kind, VisibleKind::Folder(_)))
+            .count();
+        assert_eq!(folders, 0, "flat view must have no folder items");
 
-        let files_before = items
+        let files = items
             .iter()
             .filter(|i| matches!(i.kind, VisibleKind::File(_)))
             .count();
-        assert_eq!(files_before, 3);
+        assert_eq!(files, 3);
 
-        // Fold the zoo folder
-        app.cursor = zoo_pos;
-        app.fold_current();
-
-        let items_after = app.visible_items();
-        let files_after = items_after
-            .iter()
-            .filter(|i| matches!(i.kind, VisibleKind::File(_)))
-            .count();
-        // All files under zoo should be hidden
-        assert_eq!(files_after, 0, "folding zoo must hide all files underneath");
-
-        // Sub-folders should also be hidden
-        let folders_after: Vec<&str> = items_after
-            .iter()
-            .filter_map(|i| match &i.kind {
-                VisibleKind::Folder(p) => Some(p.as_str()),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(folders_after, vec!["zoo"], "only the folded folder itself remains visible");
-    }
-
-    #[test]
-    fn left_on_file_does_not_hide_file() {
-        let mut app = App::new(parse_diff(FOLD_TEST_DIFF));
-
-        // Navigate to the first file (cat.txt)
-        let items = app.visible_items();
-        let file_pos = items
-            .iter()
-            .position(|i| matches!(i.kind, VisibleKind::File(_)))
-            .expect("must have a file");
-        app.cursor = file_pos;
-
-        let files_before = items
-            .iter()
-            .filter(|i| matches!(i.kind, VisibleKind::File(_)))
-            .count();
-
-        // Press left on a file — should move to parent folder, not hide the file
-        app.fold_current();
-
-        let items_after = app.visible_items();
-        let files_after = items_after
-            .iter()
-            .filter(|i| matches!(i.kind, VisibleKind::File(_)))
-            .count();
-        assert_eq!(
-            files_before, files_after,
-            "pressing left on a file must not hide any files"
-        );
+        // All files should be at depth 0
+        for item in &items {
+            if matches!(item.kind, VisibleKind::File(_)) {
+                assert_eq!(item.depth, 0);
+            }
+        }
     }
 }

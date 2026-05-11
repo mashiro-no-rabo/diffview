@@ -1,8 +1,7 @@
 ---
 source: tests/output_format.rs
-expression: "trace_navigation(&mut app, &[\"j\", \"down\", \"left\"])"
+expression: "trace_navigation(&mut app, &[\"down\", \"left\"])"
 ---
-start: [folder] app
-    j: app/core/engine/processor.rs
+start: app/core/engine/processor.rs
  down: [hunk app/core/engine/processor.rs.0]
  left: app/core/engine/processor.rs

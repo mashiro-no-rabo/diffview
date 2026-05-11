@@ -456,7 +456,7 @@ fn render_segments(
                 } else {
                     "▼"
                 };
-                let name = file.rel_path.rsplit('/').next().unwrap_or(&file.rel_path);
+                let name = file.rel_path.as_str();
 
                 let status_char = match file.status {
                     FileStatus::Modified => "M",
@@ -1012,8 +1012,8 @@ fn draw_help_dialog(frame: &mut Frame) {
             Span::raw("Navigate items"),
         ]),
         Line::from(vec![
-            Span::styled("  j/k        ", Style::default().fg(Color::Yellow)),
-            Span::raw("Jump to prev/next file"),
+            Span::styled("  j/k, n/p   ", Style::default().fg(Color::Yellow)),
+            Span::raw("Jump to next/prev file"),
         ]),
         Line::from(vec![
             Span::styled("  ←          ", Style::default().fg(Color::Yellow)),

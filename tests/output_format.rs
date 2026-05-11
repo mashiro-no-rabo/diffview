@@ -400,58 +400,17 @@ fn round_trip_all_confirmed() {
     assert_eq!(reparsed[1].rel_path, "lib/b.rs");
 }
 
-// ── Merged folder paths ──
+// ── Flat default view ──
 
 #[test]
-fn single_child_folders_merge() {
-    let diff = make_diff(&[("src/app/components/Foo.rs", "M", &[HUNK_A])]);
-    let app = App::new(parse_diff(&diff));
-    insta::assert_debug_snapshot!(folder_items(&app));
-}
-
-#[test]
-fn branching_folders_not_merged() {
+fn default_view_emits_no_folders() {
     let diff = make_diff(&[
         ("src/app/components/Foo.rs", "M", &[HUNK_A]),
         ("src/app/utils/Bar.rs", "M", &[HUNK_B]),
+        ("Cargo.toml", "M", &[HUNK_C]),
     ]);
-    let app = App::new(parse_diff(&diff));
-    insta::assert_debug_snapshot!(folder_items(&app));
-}
-
-#[test]
-fn folder_with_files_and_subfolder_not_merged() {
-    let diff = make_diff(&[
-        ("src/lib.rs", "M", &[HUNK_A]),
-        ("src/app/main.rs", "M", &[HUNK_B]),
-    ]);
-    let app = App::new(parse_diff(&diff));
-    insta::assert_debug_snapshot!(folder_items(&app));
-}
-
-#[test]
-fn root_level_files_have_no_folders() {
-    let diff = make_diff(&[("Cargo.toml", "M", &[HUNK_A])]);
     let app = App::new(parse_diff(&diff));
     assert!(folder_items(&app).is_empty());
-}
-
-#[test]
-fn deep_merge_chain() {
-    let diff = make_diff(&[("a/b/c/d/file.rs", "M", &[HUNK_A])]);
-    let app = App::new(parse_diff(&diff));
-    insta::assert_debug_snapshot!(folder_items(&app));
-}
-
-#[test]
-fn mixed_root_and_nested_files() {
-    let diff = make_diff(&[
-        ("Cargo.toml", "M", &[HUNK_A]),
-        ("src/main.rs", "M", &[HUNK_B]),
-        ("tests/test.rs", "M", &[HUNK_C]),
-    ]);
-    let app = App::new(parse_diff(&diff));
-    insta::assert_debug_snapshot!(folder_items(&app));
 }
 
 // ── Binary files in model ──
@@ -730,19 +689,18 @@ fn j_then_k_round_trips() {
 #[test]
 fn render_scrollbar_at_top() {
     let mut app = App::new(parse_diff(NAV_DIFF));
-    // Cursor starts at first folder — scrollbar should be at top
+    // Cursor starts at first file — scrollbar should be at top
     insta::assert_snapshot!(render_app(&mut app, 60, 20));
 }
 
 #[test]
 fn render_scrollbar_at_bottom() {
     let mut app = App::new(parse_diff(NAV_DIFF));
-    // Navigate to last hunk
-    app.next_file(); // 1
-    app.next_file(); // 2
-    app.next_file(); // 3
-    app.next_file(); // 4
-    app.next_file(); // 5
+    // Navigate to last file's hunk
+    app.next_file(); // 2nd file
+    app.next_file(); // 3rd file
+    app.next_file(); // 4th file
+    app.next_file(); // 5th file
     app.cursor_down(); // last hunk
     insta::assert_snapshot!(render_app(&mut app, 60, 20));
 }
@@ -810,8 +768,7 @@ fn render_mixed_types_at_top() {
 #[test]
 fn render_mixed_types_at_bottom() {
     let mut app = App::new(parse_diff(MIXED_TYPES_DIFF));
-    // Navigate to last file (renamed), then its hunk
-    app.next_file(); // main.rs
+    // Cursor starts on main.rs; navigate to last file (renamed), then its hunk
     app.next_file(); // logo.png (binary)
     app.next_file(); // Cargo.lock
     app.next_file(); // old_util.rs (deleted)
@@ -823,7 +780,6 @@ fn render_mixed_types_at_bottom() {
 #[test]
 fn render_mixed_types_at_binary() {
     let mut app = App::new(parse_diff(MIXED_TYPES_DIFF));
-    app.next_file(); // main.rs
     app.next_file(); // logo.png (binary, folded by default)
     insta::assert_snapshot!(render_app(&mut app, 60, 25));
 }
@@ -831,7 +787,6 @@ fn render_mixed_types_at_binary() {
 #[test]
 fn render_mixed_types_at_deleted() {
     let mut app = App::new(parse_diff(MIXED_TYPES_DIFF));
-    app.next_file(); // main.rs
     app.next_file(); // logo.png
     app.next_file(); // Cargo.lock
     app.next_file(); // old_util.rs (deleted, folded by default)
@@ -839,56 +794,27 @@ fn render_mixed_types_at_deleted() {
 }
 
 #[test]
-fn left_on_file_goes_to_parent_folder() {
-    let mut app = App::new(parse_diff(NAV_DIFF));
-    // Navigate to first file, then press left — should go to parent folder, NOT fold
-    insta::assert_snapshot!(trace_navigation(
-        &mut app,
-        &["j", "left"]
-    ));
-}
-
-#[test]
 fn left_on_hunk_goes_to_file() {
     let mut app = App::new(parse_diff(NAV_DIFF));
-    // Navigate to first file, then down to hunk, then left — should go to file
+    // Navigate down to hunk, then left — should go to file
     insta::assert_snapshot!(trace_navigation(
         &mut app,
-        &["j", "down", "left"]
-    ));
-}
-
-#[test]
-fn left_on_file_then_left_on_folder() {
-    let mut app = App::new(parse_diff(NAV_DIFF));
-    // j to file, left to parent folder, left folds it, left to grandparent
-    insta::assert_snapshot!(trace_navigation(
-        &mut app,
-        &["j", "j", "left", "left", "left"]
+        &["down", "left"]
     ));
 }
 
 #[test]
 fn render_left_on_file_keeps_content() {
     let mut app = App::new(parse_diff(NAV_DIFF));
-    app.next_file(); // go to processor.rs
-    app.fold_current(); // press left
-    // File content should still be visible (not folded)
-    insta::assert_snapshot!(render_app(&mut app, 60, 20));
-}
-
-#[test]
-fn render_left_on_folder_folds_children() {
-    let mut app = App::new(parse_diff(NAV_DIFF));
-    // cursor starts on [folder] app — press left to fold it
-    app.fold_current();
+    // Cursor starts on processor.rs (first file)
+    app.fold_current(); // press left — no parent folder, content stays visible
     insta::assert_snapshot!(render_app(&mut app, 60, 20));
 }
 
 #[test]
 fn down_walks_all_targets() {
     let mut app = App::new(parse_diff(NAV_DIFF));
-    // down visits folders, files, and hunk headers in order
+    // down visits files and hunk headers in order
     let keys: Vec<&str> = (0..20).map(|_| "down").collect();
     insta::assert_snapshot!(trace_navigation(&mut app, &keys));
 }
@@ -898,7 +824,7 @@ fn down_walks_all_targets() {
 #[test]
 fn file_view_render_at_top() {
     let mut app = App::new(parse_diff(NAV_DIFF));
-    app.next_file(); // go to processor.rs
+    // Cursor starts on processor.rs (first file)
     app.enter_file_view();
     insta::assert_snapshot!(render_app(&mut app, 60, 20));
 }
@@ -906,7 +832,6 @@ fn file_view_render_at_top() {
 #[test]
 fn file_view_render_cursor_on_line() {
     let mut app = App::new(parse_diff(NAV_DIFF));
-    app.next_file();
     app.enter_file_view();
     app.file_view_down(); // move to first hunk line
     app.file_view_down();
@@ -916,8 +841,7 @@ fn file_view_render_cursor_on_line() {
 #[test]
 fn file_view_render_multi_hunk() {
     let mut app = App::new(parse_diff(MIXED_TYPES_DIFF));
-    // main.rs has 2 hunks
-    app.next_file();
+    // main.rs has 2 hunks; cursor starts here
     app.enter_file_view();
     insta::assert_snapshot!(render_app(&mut app, 60, 20));
 }
@@ -925,7 +849,6 @@ fn file_view_render_multi_hunk() {
 #[test]
 fn file_view_up_down_navigation() {
     let mut app = App::new(parse_diff(NAV_DIFF));
-    app.next_file();
     app.enter_file_view();
     // Set viewport height so half-page works
     if let Some(fv) = &mut app.file_view {
@@ -940,7 +863,7 @@ fn file_view_up_down_navigation() {
 #[test]
 fn file_view_half_page_navigation() {
     let mut app = App::new(parse_diff(MIXED_TYPES_DIFF));
-    app.next_file(); // main.rs with 2 hunks
+    // main.rs with 2 hunks; cursor starts here
     app.enter_file_view();
     if let Some(fv) = &mut app.file_view {
         fv.viewport_height = 10;
@@ -954,7 +877,6 @@ fn file_view_half_page_navigation() {
 #[test]
 fn file_view_toggle_hunk() {
     let mut app = App::new(parse_diff(NAV_DIFF));
-    app.next_file();
     app.enter_file_view();
     // Toggle the hunk (cursor starts on hunk header)
     app.file_view_toggle();
@@ -967,7 +889,6 @@ fn file_view_toggle_hunk() {
 #[test]
 fn file_view_toggle_from_line() {
     let mut app = App::new(parse_diff(NAV_DIFF));
-    app.next_file();
     app.enter_file_view();
     app.file_view_down(); // move to a hunk line
     app.file_view_toggle(); // should toggle the parent hunk
@@ -977,8 +898,7 @@ fn file_view_toggle_from_line() {
 #[test]
 fn file_view_exit_returns_to_file() {
     let mut app = App::new(parse_diff(NAV_DIFF));
-    app.next_file(); // processor.rs
-    app.next_file(); // login.rs
+    app.next_file(); // login.rs (file index 1)
     app.enter_file_view();
     assert!(app.file_view.is_some());
     app.exit_file_view();
@@ -990,7 +910,7 @@ fn file_view_exit_returns_to_file() {
 #[test]
 fn file_view_render_after_toggle() {
     let mut app = App::new(parse_diff(MIXED_TYPES_DIFF));
-    app.next_file(); // main.rs
+    // Cursor starts on main.rs
     app.enter_file_view();
     app.file_view_toggle(); // confirm first hunk — lines collapse
     insta::assert_snapshot!(render_app(&mut app, 60, 20));
@@ -1009,18 +929,9 @@ Binary files a/image.png and b/image.png differ
 }
 
 #[test]
-fn file_view_no_enter_on_folder() {
-    let mut app = App::new(parse_diff(NAV_DIFF));
-    // Cursor starts on folder
-    app.enter_file_view();
-    assert!(app.file_view.is_none(), "should not enter file view from folder");
-}
-
-#[test]
 fn file_view_enter_from_hunk_header() {
     let mut app = App::new(parse_diff(NAV_DIFF));
-    app.next_file();
-    app.cursor_down(); // move to hunk header
+    app.cursor_down(); // move from file to hunk header
     app.enter_file_view();
     assert!(app.file_view.is_some(), "should enter file view from hunk header");
     assert_eq!(app.file_view.as_ref().unwrap().file_idx, 0);
@@ -1029,7 +940,6 @@ fn file_view_enter_from_hunk_header() {
 #[test]
 fn file_view_cursor_clamps_at_bounds() {
     let mut app = App::new(parse_diff(NAV_DIFF));
-    app.next_file();
     app.enter_file_view();
     // Up at top should stay at 0
     app.file_view_up();

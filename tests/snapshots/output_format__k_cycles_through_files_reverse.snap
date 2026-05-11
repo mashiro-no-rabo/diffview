@@ -2,7 +2,7 @@
 source: tests/output_format.rs
 expression: "trace_navigation(&mut app, &[\"k\", \"k\", \"k\", \"k\", \"k\", \"k\"])"
 ---
-start: [folder] app
+start: app/core/engine/processor.rs
     k: app/plugins/logging/output.rs
     k: app/plugins/network/client.rs
     k: app/plugins/storage/cache.rs

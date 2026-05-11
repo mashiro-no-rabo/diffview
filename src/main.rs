@@ -152,8 +152,8 @@ fn event_loop(
                 KeyCode::Down => app.cursor_down(),
                 KeyCode::Up => app.cursor_up(),
 
-                KeyCode::Char('j') => app.next_file(),
-                KeyCode::Char('k') => app.prev_file(),
+                KeyCode::Char('j') | KeyCode::Char('n') => app.next_file(),
+                KeyCode::Char('k') | KeyCode::Char('p') => app.prev_file(),
 
                 KeyCode::Char(' ') => app.confirm_and_advance(),
                 KeyCode::Char('a') => app.invert_confirmation(),
