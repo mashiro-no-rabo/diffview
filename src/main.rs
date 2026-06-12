@@ -5,6 +5,7 @@ mod ui;
 
 use std::io::{self, Read};
 use std::process;
+use std::time::Duration;
 
 use anyhow::Result;
 use crossterm::event::{
@@ -56,12 +57,28 @@ fn run() -> Result<()> {
 
     let result = event_loop(&mut terminal, &mut app);
 
-    // Terminal teardown
+    // Terminal teardown. Disable mouse capture first so the terminal stops
+    // emitting scroll sequences, then drain anything still buffered (trackpad
+    // momentum keeps delivering mouse events for a while after a scroll) before
+    // leaving raw mode — otherwise those leftover bytes get echoed to the shell.
+    crossterm::execute!(terminal.backend_mut(), DisableMouseCapture)?;
+    drain_pending_input();
     disable_raw_mode()?;
-    crossterm::execute!(terminal.backend_mut(), DisableMouseCapture, LeaveAlternateScreen)?;
+    crossterm::execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
 
     result
+}
+
+/// Consume any buffered input events until the stream is quiet for a short
+/// window. Used on teardown to swallow trailing trackpad-momentum scroll
+/// sequences that would otherwise leak to the shell prompt.
+fn drain_pending_input() {
+    while let Ok(true) = event::poll(Duration::from_millis(50)) {
+        if event::read().is_err() {
+            break;
+        }
+    }
 }
 
 fn event_loop(
