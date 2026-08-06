@@ -952,3 +952,93 @@ fn file_view_cursor_clamps_at_bounds() {
     }
     assert_eq!(app.file_view.as_ref().unwrap().line_cursor, total - 1);
 }
+
+
+// ── Scrolling to the end ──
+
+fn long_file_diff(lines: usize) -> String {
+    let mut hunk = format!("@@ -1,{} +1,{} @@\n", lines, lines);
+    for i in 0..lines {
+        hunk.push_str(&format!(" line{}\n", i));
+    }
+    make_diff(&[("src/big.rs", "M", &[hunk.as_str()])])
+}
+
+#[test]
+fn scroll_reaches_last_row() {
+    let mut app = App::new(parse_diff(&long_file_diff(40)));
+    // One render to publish geometry, then scroll to the bottom.
+    render_app(&mut app, 60, 20);
+    for _ in 0..500 {
+        app.scroll_line_down();
+    }
+    let out = render_app(&mut app, 60, 20);
+    assert!(out.contains("line39"), "last diff line must be reachable:\n{out}");
+    assert!(out.contains('└'), "closing border must be reachable:\n{out}");
+    insta::assert_snapshot!(out);
+}
+
+#[test]
+fn cursor_down_reaches_last_row() {
+    let mut app = App::new(parse_diff(&long_file_diff(40)));
+    render_app(&mut app, 60, 20);
+    for _ in 0..20 {
+        app.cursor_down();
+    }
+    let out = render_app(&mut app, 60, 20);
+    assert!(out.contains("line39"), "last diff line must be reachable:\n{out}");
+}
+
+// ── Word wrapping ──
+
+const LONG_LINE_DIFF: &str = "\
+diff --git a/src/wide.rs b/src/wide.rs
+--- a/src/wide.rs
++++ b/src/wide.rs
+@@ -1,2 +1,3 @@
+ fn short() {}
++    let result = compute_everything(first_argument, second_argument, third_argument);
+ fn tail() {}
+";
+
+#[test]
+fn wrap_is_on_by_default() {
+    let app = App::new(parse_diff(LONG_LINE_DIFF));
+    assert!(app.wrap);
+}
+
+#[test]
+fn render_wrapped_long_line() {
+    let mut app = App::new(parse_diff(LONG_LINE_DIFF));
+    insta::assert_snapshot!(render_app(&mut app, 60, 12));
+}
+
+#[test]
+fn render_unwrapped_long_line() {
+    let mut app = App::new(parse_diff(LONG_LINE_DIFF));
+    app.toggle_wrap();
+    assert!(!app.wrap);
+    insta::assert_snapshot!(render_app(&mut app, 60, 12));
+}
+
+#[test]
+fn wrapped_rows_counted_in_geometry() {
+    let mut app = App::new(parse_diff(LONG_LINE_DIFF));
+    render_app(&mut app, 60, 12);
+    let wrapped = app.total_rendered_height();
+    app.toggle_wrap();
+    render_app(&mut app, 60, 12);
+    let flat = app.total_rendered_height();
+    assert!(wrapped > flat, "wrapping must add rows: {wrapped} vs {flat}");
+}
+
+#[test]
+fn file_view_render_wrapped_long_line() {
+    let mut app = App::new(parse_diff(LONG_LINE_DIFF));
+    app.enter_file_view();
+    app.file_view_down();
+    app.file_view_down(); // cursor on the long addition
+    insta::assert_snapshot!(render_app(&mut app, 60, 12));
+}
+
+

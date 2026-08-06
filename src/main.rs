@@ -174,6 +174,7 @@ fn event_loop(
 
                 KeyCode::Char(' ') => app.confirm_and_advance(),
                 KeyCode::Char('a') => app.invert_confirmation(),
+                KeyCode::Char('w') => app.toggle_wrap(),
 
                 KeyCode::Tab => app.enter_file_view(),
 
@@ -202,6 +203,7 @@ fn handle_file_view_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
         KeyCode::Char('k') => app.file_view_half_page_up(),
         KeyCode::Char('j') => app.file_view_half_page_down(),
         KeyCode::Char(' ') => app.file_view_toggle(),
+        KeyCode::Char('w') => app.toggle_wrap(),
         KeyCode::Enter => app.file_view_toggle_and_advance(),
         KeyCode::Tab | KeyCode::Esc => app.exit_file_view(),
         KeyCode::Char('q') => app.should_exit = true,

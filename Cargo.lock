@@ -303,6 +303,7 @@ dependencies = [
  "memchr",
  "ratatui",
  "thread_local",
+ "unicode-width",
 ]
 
 [[package]]

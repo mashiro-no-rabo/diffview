@@ -1,0 +1,24 @@
+---
+source: tests/output_format.rs
+expression: out
+---
+"││   23   line22                                           ▲"
+"││   24   line23                                           █"
+"││   25   line24                                           █"
+"││   26   line25                                           █"
+"││   27   line26                                           █"
+"││   28   line27                                           █"
+"││   29   line28                                           █"
+"││   30   line29                                           █"
+"││   31   line30                                           █"
+"││   32   line31                                           █"
+"││   33   line32                                           █"
+"││   34   line33                                           █"
+"││   35   line34                                           █"
+"││   36   line35                                           █"
+"││   37   line36                                           █"
+"││   38   line37                                           █"
+"││   39   line38                                           █"
+"│└   40   line39                                           █"
+"└──────────────────────────────────────────────────────────▼"
+" 0/1 files confirmed                                        "

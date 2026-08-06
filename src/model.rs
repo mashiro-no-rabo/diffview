@@ -40,6 +40,15 @@ pub struct App {
     pub cursor: usize,
     pub scroll_offset: usize,
     pub viewport_height: u16, // set by renderer each frame
+    pub wrap: bool,           // word-wrap long diff lines
+    /// Row of each visible item in the last rendered frame, and that frame's
+    /// total height. Both are published by the renderer, which is the only
+    /// place that knows how wrapping expanded lines into rows.
+    pub item_ys: Vec<usize>,
+    pub rendered_height: usize,
+    /// Visible-item index the next frame should place at the top of the
+    /// viewport, so a re-layout (wrap toggle) keeps the same code in view.
+    pub scroll_anchor: Option<usize>,
     pub should_exit: bool,
     pub show_help: bool,
     pub show_file_list: bool,
@@ -47,6 +56,19 @@ pub struct App {
     pub file_list_cursor: usize,
     pub file_view: Option<FileViewState>,
     matcher: ArinaeMatcher,
+}
+
+/// Scroll offset that keeps row `cursor_y` inside a `vh`-tall viewport,
+/// with a quarter-viewport margin above and below.
+pub fn scroll_for_cursor(cursor_y: usize, scroll: usize, vh: usize) -> usize {
+    let margin = vh / 4;
+    if cursor_y < scroll + margin {
+        cursor_y.saturating_sub(margin)
+    } else if cursor_y + margin >= scroll + vh {
+        (cursor_y + margin + 1).saturating_sub(vh)
+    } else {
+        scroll
+    }
 }
 
 /// Folder grouping is disabled — the default view is a flat file list.
@@ -77,6 +99,10 @@ impl App {
             cursor: 0,
             scroll_offset: 0,
             viewport_height: 0,
+            wrap: true,
+            item_ys: Vec::new(),
+            rendered_height: 0,
+            scroll_anchor: None,
             should_exit: false,
             show_help: false,
             show_file_list: false,
@@ -182,43 +208,54 @@ impl App {
 
     // ── Rendered geometry ──
 
-    /// Y-row of each visible item in the rendered output. Mirrors the
-    /// segment-rendering rules in ui.rs: each file contributes a top-border
-    /// row (the file row itself), an optional info line for binary / mode-only
+    /// True when the cached geometry still describes the current item list.
+    fn geometry_valid(&self, item_count: usize) -> bool {
+        !self.item_ys.is_empty() && self.item_ys.len() == item_count
+    }
+
+    /// Row of each visible item in the rendered output. Uses the geometry the
+    /// renderer published last frame; before the first frame (and right after
+    /// a state change that adds or removes items) it falls back to an estimate
+    /// that assumes one row per line: each file contributes a top-border row
+    /// (the file row itself), an optional info line for binary / mode-only
     /// files, and a bottom-border row after its children.
-    pub fn item_y_positions(&self) -> Vec<u16> {
+    pub fn item_y_positions(&self) -> Vec<usize> {
         let items = self.visible_items();
+        if self.geometry_valid(items.len()) {
+            return self.item_ys.clone();
+        }
+
         let mut ys = Vec::with_capacity(items.len());
-        let mut y: u16 = 0;
+        let mut y: usize = 0;
         let mut last_was_file = false;
 
         for item in &items {
             match &item.kind {
                 VisibleKind::File(idx) => {
                     if last_was_file {
-                        y = y.saturating_add(1); // previous file's bottom border
+                        y += 1; // previous file's bottom border
                     }
                     ys.push(y);
-                    y = y.saturating_add(1); // top border (= file row)
+                    y += 1; // top border (= file row)
                     let file = &self.files[*idx];
                     if file.hunks.is_empty()
                         && !self.folded_files.contains(idx)
                         && !file.all_confirmed()
                     {
-                        y = y.saturating_add(1); // info line
+                        y += 1; // info line
                     }
                     last_was_file = true;
                 }
                 VisibleKind::HunkHeader(_, _) | VisibleKind::HunkLine(_, _, _) => {
                     ys.push(y);
-                    y = y.saturating_add(1);
+                    y += 1;
                 }
                 VisibleKind::Folder(_) => {
                     if last_was_file {
-                        y = y.saturating_add(1);
+                        y += 1;
                     }
                     ys.push(y);
-                    y = y.saturating_add(1);
+                    y += 1;
                     last_was_file = false;
                 }
             }
@@ -227,18 +264,39 @@ impl App {
         ys
     }
 
-    /// Total height of the rendered main view in lines.
-    pub fn total_rendered_height(&self) -> u16 {
+    /// Total height of the rendered main view in rows.
+    pub fn total_rendered_height(&self) -> usize {
+        if self.rendered_height > 0 && self.geometry_valid(self.visible_items().len()) {
+            return self.rendered_height;
+        }
         let ys = self.item_y_positions();
         match ys.last() {
-            Some(&last) => last.saturating_add(2), // last item's row + closing bottom border
+            Some(&last) => last + 2, // last item's row + closing bottom border
             None => 0,
         }
     }
 
     fn max_scroll(&self) -> usize {
         self.total_rendered_height()
-            .saturating_sub(self.viewport_height) as usize
+            .saturating_sub(self.viewport_height as usize)
+    }
+
+    /// Turn word wrapping on/off. Row positions all change, so drop the cached
+    /// geometry and pin whatever is at the top of the viewport — the next frame
+    /// re-derives the scroll offset from it.
+    pub fn toggle_wrap(&mut self) {
+        let count = self.visible_items().len();
+        self.scroll_anchor = if self.geometry_valid(count) {
+            self.item_ys
+                .iter()
+                .rposition(|&y| y <= self.scroll_offset)
+                .or(Some(self.cursor))
+        } else {
+            Some(self.cursor)
+        };
+        self.wrap = !self.wrap;
+        self.item_ys.clear();
+        self.rendered_height = 0;
     }
 
     // ── Navigation ──
@@ -267,15 +325,11 @@ impl App {
         let Some(&cursor_y) = ys.get(self.cursor) else {
             return;
         };
-        let scroll = self.scroll_offset as u16;
-        let vh = self.viewport_height;
-        let margin = vh / 4;
-
-        if cursor_y < scroll + margin {
-            self.scroll_offset = cursor_y.saturating_sub(margin) as usize;
-        } else if cursor_y + margin >= scroll + vh {
-            self.scroll_offset = (cursor_y + margin + 1).saturating_sub(vh) as usize;
-        }
+        self.scroll_offset = scroll_for_cursor(
+            cursor_y,
+            self.scroll_offset,
+            self.viewport_height as usize,
+        );
         let max = self.max_scroll();
         if self.scroll_offset > max {
             self.scroll_offset = max;
@@ -312,8 +366,8 @@ impl App {
         if let Some(pi) = prev_idx {
             let prev_target = targets[pi];
             let prev_y = ys[prev_target];
-            let scroll = self.scroll_offset as u16;
-            if prev_y >= scroll && prev_y < scroll + self.viewport_height {
+            let scroll = self.scroll_offset;
+            if prev_y >= scroll && prev_y < scroll + self.viewport_height as usize {
                 self.cursor = prev_target;
                 return;
             }
@@ -351,8 +405,8 @@ impl App {
         if let Some(ni) = next_idx {
             let next_target = targets[ni];
             let next_y = ys[next_target];
-            let scroll = self.scroll_offset as u16;
-            if next_y >= scroll && next_y < scroll + self.viewport_height {
+            let scroll = self.scroll_offset;
+            if next_y >= scroll && next_y < scroll + self.viewport_height as usize {
                 self.cursor = next_target;
                 return;
             }
@@ -713,10 +767,10 @@ impl App {
         let total = self.file_view.as_ref()
             .map(|fv| self.file_view_lines(fv.file_idx).len())
             .unwrap_or(0);
-        if let Some(fv) = &mut self.file_view {
-            if fv.line_cursor + 1 < total {
-                fv.line_cursor += 1;
-            }
+        if let Some(fv) = &mut self.file_view
+            && fv.line_cursor + 1 < total
+        {
+            fv.line_cursor += 1;
         }
     }
 
@@ -753,10 +807,10 @@ impl App {
                 !self.files[file_idx].hunks[hunk_idx].confirmed;
             // Reclamp cursor since confirmed hunks collapse their lines
             let total = self.file_view_lines(file_idx).len();
-            if let Some(fv) = &mut self.file_view {
-                if fv.line_cursor >= total {
-                    fv.line_cursor = total.saturating_sub(1);
-                }
+            if let Some(fv) = &mut self.file_view
+                && fv.line_cursor >= total
+            {
+                fv.line_cursor = total.saturating_sub(1);
             }
         }
     }

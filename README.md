@@ -41,6 +41,7 @@ pager = ["diffview"]
 | `Space` | Toggle confirmed (reviewed) on the current file or hunk |
 | `Enter` | Same as `Space`, then advance to the next item |
 | `a` | Invert confirmation on the current file or hunk |
+| `w` | Toggle word wrap (on by default) |
 | `Tab` | Enter file view (scroll line-by-line through one file) |
 | `f` | Fuzzy file search popup |
 | `?` | Help |
@@ -57,5 +58,6 @@ pager = ["diffview"]
 | `j`/`k` | Move cursor half a page down/up |
 | `Space` | Toggle the current hunk's confirmation |
 | `Enter` | Toggle and advance to the next line |
+| `w` | Toggle word wrap (on by default) |
 | `Tab`/`Esc` | Return to the main view |
 | `q` / `Ctrl+C` | Quit |
